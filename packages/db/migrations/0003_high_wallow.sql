@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "brand_assets_object_key_unique" ON "brand_assets" USING btree ("object_key");

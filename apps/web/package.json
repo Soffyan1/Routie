@@ -1,0 +1,36 @@
+{
+  "name": "@routie/web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "dotenv -e ../../.env -- next dev",
+    "build": "next build",
+    "start": "dotenv -e ../../.env -- next start",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@routie/db": "*",
+    "@routie/domain": "*",
+    "@routie/providers": "*",
+    "@routie/publishers": "*",
+    "@routie/security": "*",
+    "@routie/storage": "*",
+    "bullmq": "^6.1.1",
+    "drizzle-orm": "^0.45.2",
+    "ioredis": "^5.10.2",
+    "lucide-react": "^0.577.0",
+    "luxon": "^3.7.2",
+    "next": "^16.3.1",
+    "nodemailer": "^9.0.5",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/luxon": "^3.7.1",
+    "@types/nodemailer": "^7.0.4",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^7.0.2"
+  }
+}

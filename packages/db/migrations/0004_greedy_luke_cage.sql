@@ -1,0 +1,1 @@
+ALTER TABLE "publish_jobs" ADD COLUMN "provider_job_id" text;

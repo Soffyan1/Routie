@@ -1,0 +1,123 @@
+openapi: 3.1.0
+info:
+  title: Server Pulsa → Routie Internal API
+  version: 1.0.0
+  description: Kontrak yang diimplementasikan oleh server pulsa untuk SSO dan entitlement Routie.
+servers:
+  - url: https://server-pulsa.example.com
+paths:
+  /internal/routie/sso/exchange:
+    post:
+      summary: Tukar authorization code satu kali
+      description: Code harus single-use, disimpan dalam bentuk hash, berumur maksimal 60 detik, dan terikat pada customer serta user yang sedang login.
+      security:
+        - serviceToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code]
+              properties:
+                code: { type: string, minLength: 32 }
+      responses:
+        "200":
+          description: Identity dan entitlement tervalidasi
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SsoIdentity" }
+        "400": { description: Code malformed }
+        "401": { description: Service token invalid }
+        "409": { description: Code sudah dipakai }
+        "410": { description: Code expired }
+  /internal/routie/entitlements/{customerId}:
+    get:
+      summary: Verifikasi entitlement terkini
+      security:
+        - serviceToken: []
+      parameters:
+        - name: customerId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Entitlement customer
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [customerId, active, status, version]
+                properties:
+                  customerId: { type: string }
+                  active: { type: boolean }
+                  status: { type: string, enum: [active, canceled, expired] }
+                  currentPeriodEnd: { type: [string, "null"], format: date-time }
+                  version: { type: string, description: Monotonic version atau timestamp untuk mencegah event lama menimpa data baru. }
+        "401": { description: Service token invalid }
+        "404": { description: Customer tidak ditemukan }
+webhooks:
+  entitlementChanged:
+    post:
+      summary: Server pulsa mengirim event ke Routie
+      description: Kirim ke `POST /api/integrations/server-pulsa/webhook`. Retry dengan event ID yang sama aman karena receiver idempotent.
+      parameters:
+        - { name: X-Routie-Event-Id, in: header, required: true, schema: { type: string } }
+        - { name: X-Routie-Timestamp, in: header, required: true, description: Unix timestamp dalam detik., schema: { type: string, pattern: "^[0-9]+$" } }
+        - { name: X-Routie-Signature, in: header, required: true, description: HMAC-SHA256 hex dari `eventId.timestamp.rawBody`., schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EntitlementEvent" }
+      responses:
+        "200": { description: Diterima atau duplicate }
+        "401": { description: Signature/timestamp invalid }
+components:
+  securitySchemes:
+    serviceToken:
+      type: http
+      scheme: bearer
+  schemas:
+    SsoIdentity:
+      type: object
+      additionalProperties: false
+      required: [customer, user, entitlement]
+      properties:
+        customer:
+          type: object
+          additionalProperties: false
+          required: [id, brandName]
+          properties:
+            id: { type: string }
+            brandName: { type: string }
+        user:
+          type: object
+          additionalProperties: false
+          required: [id, email, name]
+          properties:
+            id: { type: string }
+            email: { type: string, format: email }
+            name: { type: string }
+        entitlement:
+          type: object
+          additionalProperties: false
+          required: [active, currentPeriodEnd]
+          properties:
+            active: { type: boolean }
+            currentPeriodEnd: { type: [string, "null"], format: date-time }
+    EntitlementEvent:
+      type: object
+      additionalProperties: false
+      required: [type, customerId, occurredAt]
+      properties:
+        type:
+          type: string
+          enum: [subscription.activated, subscription.renewed, subscription.canceled, subscription.expired]
+        customerId: { type: string }
+        occurredAt: { type: string, format: date-time }
+        currentPeriodEnd: { type: [string, "null"], format: date-time }
+        version: { type: string }

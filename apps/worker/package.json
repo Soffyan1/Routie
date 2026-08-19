@@ -1,0 +1,24 @@
+{
+  "name": "@routie/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "dotenv -e ../../.env -- tsx watch src/index.ts",
+    "start": "dotenv -e ../../.env -- tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@routie/db": "*",
+    "@routie/domain": "*",
+    "@routie/providers": "*",
+    "@routie/publishers": "*",
+    "@routie/security": "*",
+    "@routie/storage": "*",
+    "bullmq": "^6.1.1",
+    "drizzle-orm": "^0.45.2",
+    "ioredis": "^5.10.2",
+    "tsx": "^4.21.0"
+  },
+  "devDependencies": { "typescript": "^7.0.2" }
+}
