@@ -1,6 +1,15 @@
 import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { assertSafePublicUrl, createWebhookSignature, decryptSecret, encryptSecret, verifyWebhookSignature } from "../src";
+import {
+  assertSafePublicUrl,
+  createWebhookSignature,
+  decryptSecret,
+  encryptSecret,
+  generateCodeChallenge,
+  generateCodeVerifier,
+  generateState,
+  verifyWebhookSignature
+} from "../src";
 
 describe("secret envelope", () => {
   const key = randomBytes(32).toString("base64");
@@ -10,6 +19,24 @@ describe("secret envelope", () => {
     expect(encrypted).not.toContain("sk-private");
     expect(decryptSecret(encrypted, key, "workspace-a:OPENAI")).toBe("sk-private");
     expect(() => decryptSecret(encrypted, key, "workspace-b:OPENAI")).toThrow();
+  });
+});
+
+describe("PKCE helper", () => {
+  it("generates valid high-entropy verifier and sha256 challenge", () => {
+    const verifier = generateCodeVerifier();
+    expect(verifier.length).toBeGreaterThanOrEqual(43);
+    const challenge = generateCodeChallenge(verifier);
+    expect(challenge).toBeDefined();
+    expect(challenge.length).toBeGreaterThan(10);
+    // Same verifier produces consistent challenge
+    expect(generateCodeChallenge(verifier)).toBe(challenge);
+  });
+
+  it("generates random CSRF state", () => {
+    const state1 = generateState();
+    const state2 = generateState();
+    expect(state1).not.toBe(state2);
   });
 });
 

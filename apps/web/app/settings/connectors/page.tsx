@@ -55,9 +55,31 @@ export default function ConnectorsPage() {
 
   useEffect(() => {
     fetchConnections();
+
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get("connected");
+    const error = params.get("error");
+    if (connected) {
+      setStatusMessage({
+        success: true,
+        text: `Akun ${connected} resmi berhasil terhubung via OAuth 2.0 PKCE!`
+      });
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (error) {
+      setStatusMessage({
+        success: false,
+        text: decodeURIComponent(error)
+      });
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
   }, []);
 
   async function handleToggle(channelId: string, isCurrentlyConnected: boolean) {
+    if (channelId === "TIKTOK" && !isCurrentlyConnected) {
+      window.location.href = "/api/auth/tiktok";
+      return;
+    }
+
     try {
       setActionLoading(channelId);
       setStatusMessage(null);
