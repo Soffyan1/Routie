@@ -22,6 +22,21 @@ type GeminiPayload = {
   error?: { code?: number; message?: string };
 };
 
+async function inputParts(urls: string[] | undefined): Promise<Array<{ inlineData: { mimeType: string; data: string } }>> {
+  if (!urls?.length) return [];
+  return Promise.all(urls.slice(0, 6).map(async (url) => {
+    const dataMatch = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)$/.exec(url);
+    if (dataMatch) return { inlineData: { mimeType: dataMatch[1]!, data: dataMatch[2]! } };
+    const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+    if (!response.ok) throw new Error("Routie tidak dapat mengambil gambar referensi dengan aman.");
+    const mimeType = response.headers.get("content-type")?.split(";")[0] ?? "";
+    if (!/^image\/(png|jpeg|webp)$/.test(mimeType)) throw new Error("Format gambar referensi belum didukung.");
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength === 0 || bytes.byteLength > 10 * 1024 * 1024) throw new Error("Ukuran gambar referensi tidak valid.");
+    return { inlineData: { mimeType, data: Buffer.from(bytes).toString("base64") } };
+  }));
+}
+
 export class GeminiAdapter implements AIProviderAdapter {
   readonly provider = "GEMINI" as const;
 
@@ -43,7 +58,7 @@ export class GeminiAdapter implements AIProviderAdapter {
     if (request.capability === "VIDEO") return this.generateVideo(apiKey, request);
     const isTts = request.capability === "TTS";
     const body = {
-      contents: [{ role: "user", parts: [{ text: [request.system, request.prompt].filter(Boolean).join("\n\n") }] }],
+      contents: [{ role: "user", parts: [{ text: [request.system, request.prompt].filter(Boolean).join("\n\n") }, ...(request.capability === "IMAGE" ? await inputParts(request.inputAssetUrls) : [])] }],
       ...(request.capability === "WEB_SEARCH" ? { tools: [{ google_search: {} }] } : {}),
       ...(request.capability === "IMAGE" ? { generationConfig: { responseModalities: ["TEXT", "IMAGE"], imageConfig: { aspectRatio: request.aspectRatio ?? "1:1" } } } : {}),
       ...(isTts ? { generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } } } } } : {})

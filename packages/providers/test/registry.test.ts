@@ -4,6 +4,7 @@ import { getProviderAdapter, modelsForCapability } from "../src";
 describe("AI capability registry", () => {
   it("does not expose Anthropic as a media generator", () => {
     expect(modelsForCapability("IMAGE").some((model) => model.provider === "ANTHROPIC")).toBe(false);
+    expect(modelsForCapability("IMAGE").some((model) => model.provider === "ZARK" && model.id === "auto")).toBe(true);
     expect(modelsForCapability("VIDEO").map((model) => model.provider)).toEqual(["GEMINI"]);
   });
 

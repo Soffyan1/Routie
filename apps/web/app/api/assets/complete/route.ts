@@ -12,7 +12,8 @@ const inputSchema = z.object({
   kind: z.enum(["IMAGE", "VIDEO", "AUDIO", "DOCUMENT", "LOGO", "FONT"]),
   contentType: z.string().min(1),
   sizeBytes: z.number().int().positive(),
-  checksum: z.string().min(16).max(256)
+  checksum: z.string().min(16).max(256),
+  metadata: z.record(z.string(), z.string().max(255)).optional()
 });
 
 export async function POST(request: NextRequest) {
@@ -39,7 +40,7 @@ export async function POST(request: NextRequest) {
         mimeType: input.contentType,
         sizeBytes: input.sizeBytes,
         checksum: input.checksum,
-        metadata: object.metadata
+        metadata: { ...object.metadata, ...input.metadata }
       }).returning();
       await tx.update(workspaces).set({
         storageUsedBytes: sql`${workspaces.storageUsedBytes} + ${input.sizeBytes}`,

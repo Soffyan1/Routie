@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { providerRegistry } from "@routie/providers";
+import { isZarkPilotEnabled, providerRegistry } from "@routie/providers";
 import { channelRegistry } from "@routie/publishers";
 
 export const dynamic = "force-dynamic";
@@ -9,7 +9,9 @@ export function GET() {
     status: "ok",
     service: "routie-web",
     timestamp: new Date().toISOString(),
-    aiProviders: providerRegistry().map(({ provider, models }) => ({ provider, models: models.length })),
+    aiProviders: providerRegistry()
+      .filter(({ provider }) => provider !== "ZARK" || isZarkPilotEnabled(process.env))
+      .map(({ provider, models }) => ({ provider, models: models.length })),
     socialChannels: channelRegistry()
   });
 }

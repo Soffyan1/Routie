@@ -11,60 +11,58 @@ export class ProviderRequestError extends Error {
 }
 
 export async function providerFetch(provider: string, url: string, init: RequestInit): Promise<Response> {
-  const maxRetries = 4;
-  let lastError: Error | null = null;
-
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      const response = await fetch(url, { ...init, signal: AbortSignal.timeout(120_000) });
-      if (response.ok) {
-        return response;
-      }
-
-      // Retryable HTTP status codes
-      const isRetryable = response.status === 429 || response.status === 408 || response.status === 409 || response.status >= 500;
-      if (isRetryable && attempt < maxRetries) {
-        const headerRetry = parseRetryAfter(response.headers.get("retry-after"));
-        const jitter = Math.floor(Math.random() * 500);
-        const retryDelayMs = headerRetry || (attempt * 2_000 + jitter);
-        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
-        continue;
-      }
-
-      const body = (await response.text()).slice(0, 2_000);
-      const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"));
-      throw new ProviderRequestError({
-        code: `HTTP_${response.status}`,
-        message: `Provider request failed (${response.status})`,
-        retryable: isRetryable,
-        provider,
-        ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
-        details: { sanitizedBody: redactSecrets(body) }
-      });
-    } catch (error) {
-      if (error instanceof ProviderRequestError) {
-        if (error.normalized.retryable && attempt < maxRetries) {
-          const jitter = Math.floor(Math.random() * 500);
-          await new Promise((resolve) => setTimeout(resolve, attempt * 2_000 + jitter));
-          continue;
-        }
-        throw error;
-      }
-      lastError = error instanceof Error ? error : new Error(String(error));
-      if (attempt < maxRetries) {
-        const jitter = Math.floor(Math.random() * 500);
-        await new Promise((resolve) => setTimeout(resolve, attempt * 1_500 + jitter));
-        continue;
-      }
-    }
+  let response: Response;
+  try {
+    response = await fetch(url, { ...init, signal: AbortSignal.timeout(120_000) });
+  } catch (error) {
+    throw new ProviderRequestError({
+      code: "NETWORK_ERROR",
+      message: error instanceof Error ? error.message : "Provider network request failed",
+      retryable: true,
+      provider
+    });
   }
 
+  if (response.ok) return response;
+
+  const body = (await response.text()).slice(0, 2_000);
+  const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"));
+  const isRetryable = response.status === 429 || response.status === 408 || response.status === 409 || response.status >= 500;
+  const parsed = parseProviderErrorBody(body);
+  const message =
+    response.status === 429
+      ? "Layanan AI sedang membatasi permintaan. Routie akan memberi jeda sebelum mencoba kembali."
+      : parsed.message || `Provider request failed (${response.status})`;
+
   throw new ProviderRequestError({
-    code: "NETWORK_ERROR",
-    message: lastError?.message || "Provider network request failed",
-    retryable: true,
-    provider
+    code: parsed.code || `HTTP_${response.status}`,
+    message,
+    retryable: isRetryable,
+    provider,
+    ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+    details: { httpStatus: response.status, sanitizedBody: redactSecrets(body) }
   });
+}
+
+function parseProviderErrorBody(body: string): { code?: string; message?: string } {
+  try {
+    const parsed = JSON.parse(body) as {
+      code?: string;
+      message?: string;
+      error?: string | { code?: string | number; status?: string; message?: string };
+    };
+    if (typeof parsed.error === "string") {
+      return { ...(parsed.code ? { code: parsed.code } : {}), message: parsed.error };
+    }
+    const code = parsed.error?.status || String(parsed.error?.code ?? parsed.code ?? "");
+    const message = parsed.error?.message || parsed.message;
+    return {
+      ...(code ? { code } : {}),
+      ...(message ? { message } : {})
+    };
+  } catch {
+    return {};
+  }
 }
 
 function parseRetryAfter(value: string | null): number | undefined {
@@ -89,7 +87,10 @@ export function assertCapability(models: readonly ProviderModel[], model: string
   if (entry.lifecycle === "DEPRECATED") throw new Error(`Model ${model} is deprecated`);
 }
 
-export function toDataUrl(mimeType: string, bytes: ArrayBuffer | string): string {
-  const base64 = typeof bytes === "string" ? bytes : Buffer.from(bytes).toString("base64");
+export function toDataUrl(mimeType: string, bytes: ArrayBuffer | Uint8Array | string): string {
+  const base64 =
+    typeof bytes === "string"
+      ? bytes
+      : Buffer.from(bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes).toString("base64");
   return `data:${mimeType};base64,${base64}`;
 }

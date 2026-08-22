@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, gt, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { createDatabase, magicLinks, memberships, users, withTenant } from "@routie/db";
+import { hasWorkspacePermission } from "@routie/domain";
 import { requireSession } from "@/lib/auth";
 import { serverEnv } from "@/lib/env";
 import { apiError } from "@/lib/http";
@@ -32,12 +33,19 @@ export async function GET() {
             createdAt: magicLinks.createdAt
           })
           .from(magicLinks)
-          .where(and(eq(magicLinks.workspaceId, session.workspaceId), eq(magicLinks.consumedAt, null as unknown as Date)))
+          .where(and(
+            eq(magicLinks.workspaceId, session.workspaceId),
+            eq(magicLinks.purpose, "TEAM_INVITE"),
+            isNull(magicLinks.consumedAt),
+            isNull(magicLinks.revokedAt),
+            gt(magicLinks.expiresAt, new Date())
+          ))
       ]);
 
       return {
         members: activeMembers,
-        invitations: pendingInvites
+        invitations: session.role === "OWNER" ? pendingInvites : [],
+        canManage: session.role === "OWNER"
       };
     });
 
@@ -55,7 +63,7 @@ const updateRoleSchema = z.object({
 export async function PUT(request: NextRequest) {
   try {
     const session = await requireSession();
-    if (session.role !== "OWNER") {
+    if (!hasWorkspacePermission(session.role, "MANAGE_TEAM")) {
       throw new Error("Only workspace owners can modify member roles");
     }
     const input = updateRoleSchema.parse(await request.json());
@@ -65,10 +73,11 @@ export async function PUT(request: NextRequest) {
 
     const db = createDatabase(serverEnv().DATABASE_URL);
     await withTenant(db, session.workspaceId, async (tx) => {
-      await tx
+      const updated = await tx
         .update(memberships)
         .set({ role: input.role })
         .where(and(eq(memberships.workspaceId, session.workspaceId), eq(memberships.userId, input.userId)));
+      if (updated.count === 0) throw new Error("Anggota tidak ditemukan di workspace ini.");
     });
 
     return NextResponse.json({ success: true });
@@ -84,7 +93,7 @@ const deleteMemberSchema = z.object({
 export async function DELETE(request: NextRequest) {
   try {
     const session = await requireSession();
-    if (session.role !== "OWNER") {
+    if (!hasWorkspacePermission(session.role, "MANAGE_TEAM")) {
       throw new Error("Only workspace owners can remove members");
     }
     const input = deleteMemberSchema.parse(await request.json());
@@ -94,9 +103,10 @@ export async function DELETE(request: NextRequest) {
 
     const db = createDatabase(serverEnv().DATABASE_URL);
     await withTenant(db, session.workspaceId, async (tx) => {
-      await tx
+      const deleted = await tx
         .delete(memberships)
         .where(and(eq(memberships.workspaceId, session.workspaceId), eq(memberships.userId, input.userId)));
+      if (deleted.count === 0) throw new Error("Anggota tidak ditemukan di workspace ini.");
     });
 
     return NextResponse.json({ success: true });

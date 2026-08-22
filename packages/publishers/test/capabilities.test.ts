@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { capabilityFor, deliveryModeFor } from "../src";
 
-const disabled = { meta: false, tiktok: false, threads: false, youtube: false };
+const disabled = { meta: false, tiktok: false, tiktokDraft: false, threads: false, youtube: false };
 
 describe("social capability flags", () => {
   it("keeps X manual and TikTok in draft mode", () => {

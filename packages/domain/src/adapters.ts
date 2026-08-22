@@ -39,7 +39,7 @@ export interface ProviderPollResult extends GenerateResult {
 }
 
 export interface AIProviderAdapter {
-  readonly provider: "OPENAI" | "GEMINI" | "ANTHROPIC";
+  readonly provider: "OPENAI" | "GEMINI" | "ANTHROPIC" | "ZARK";
   validateCredential(apiKey: string): Promise<boolean>;
   listModels(): readonly ProviderModel[];
   generate(apiKey: string, request: GenerateRequest): Promise<GenerateResult>;
@@ -56,6 +56,8 @@ export interface PublishRequest {
   connectionId: string;
   channel: SocialChannel;
   externalAccountId: string;
+  /** The connection's chosen delivery path, resolved at publish time. */
+  deliveryMode: DeliveryMode;
   caption: string;
   mediaUrls: string[];
   contentKind: SocialCapability["contentKinds"][number];

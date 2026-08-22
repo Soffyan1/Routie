@@ -13,7 +13,7 @@ const profileSchema = z.object({
   brief: z.string().min(10).max(10_000).default(""),
   brandPersona: z.string().max(10_000).default(""),
   niche: z.string().max(100).default(""),
-  websiteUrl: z.string().max(500).default(""),
+  websiteUrl: z.union([z.literal(""), z.url().max(500)]).default(""),
   targetAudience: z.string().max(2_000).default(""),
   targetAgeMin: z.number().int().min(13).max(100).default(18),
   targetAgeMax: z.number().int().min(13).max(100).default(45),
@@ -24,7 +24,7 @@ const profileSchema = z.object({
   callsToAction: z.array(z.string().max(300)).max(20).default([]),
   colors: z.array(z.string().regex(/^#[0-9a-fA-F]{6}$/)).max(12).default([]),
   contentPillars: z.array(z.object({ name: z.string().min(1).max(80), percentage: z.number().int().min(0).max(100) })).min(1).max(10)
-}).refine((value) => value.contentPillars.reduce((total, pillar) => total + pillar.percentage, 0) === 100, {
+}).refine((value) => value.targetAgeMin <= value.targetAgeMax, { message: "Usia minimum tidak boleh melebihi usia maksimum", path: ["targetAgeMin"] }).refine((value) => value.contentPillars.reduce((total, pillar) => total + pillar.percentage, 0) === 100, {
   message: "Content pillar percentages must total 100",
   path: ["contentPillars"]
 });

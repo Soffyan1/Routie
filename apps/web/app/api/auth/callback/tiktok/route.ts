@@ -1,240 +1,125 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
-import { createDatabase, socialConnections, withTenant } from "@routie/db";
-import { encryptSecret } from "@routie/security";
+import { createDatabase } from "@routie/db";
+import { decryptSecret, verifyOAuthStateToken } from "@routie/security";
+import { requireSession } from "@/lib/auth";
 import { serverEnv } from "@/lib/env";
 import { TIKTOK_OAUTH_COOKIE } from "@/lib/pkce";
+import { persistTikTokConnection } from "@/lib/social-connection-store";
+import { resumeHeldSocialPublishJobs } from "@/lib/social-publish-resume";
 
-interface TikTokTokenResponse {
+type TikTokTokenResponse = {
   access_token?: string;
   expires_in?: number;
   open_id?: string;
-  refresh_expires_in?: number;
   refresh_token?: string;
-  scope?: string;
-  token_type?: string;
-  data?: {
-    access_token?: string;
-    expires_in?: number;
-    open_id?: string;
-    refresh_expires_in?: number;
-    refresh_token?: string;
-    scope?: string;
-    token_type?: string;
-  };
-  error?: {
-    code?: string;
-    message?: string;
-  };
+  error?: { code?: string | number; message?: string };
   error_description?: string;
+};
+
+type TikTokUserInfoResponse = {
+  data?: { user?: { display_name?: string; username?: string } };
+  error?: { code?: string | number; message?: string };
+};
+
+function connectorRedirect(appUrl: string, params: Record<string, string>): URL {
+  const url = new URL("/settings/connectors", appUrl);
+  for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+  return url;
 }
 
-interface TikTokUserInfoResponse {
-  data?: {
-    user?: {
-      open_id?: string;
-      union_id?: string;
-      avatar_url?: string;
-      display_name?: string;
-      username?: string;
-    };
-  };
-  error?: {
-    code?: string;
-    message?: string;
-  };
+function withClearedCookie(response: NextResponse): NextResponse {
+  response.cookies.delete(TIKTOK_OAUTH_COOKIE);
+  return response;
+}
+
+function isTikTokError(payload: TikTokTokenResponse | TikTokUserInfoResponse): boolean {
+  const code = payload.error?.code;
+  return code !== undefined && code !== "ok" && code !== "0" && code !== 0;
 }
 
 export async function GET(request: NextRequest) {
   const env = serverEnv();
-  const searchParams = request.nextUrl.searchParams;
-
-  const errorParam = searchParams.get("error");
-  const errorDesc = searchParams.get("error_description");
-  if (errorParam) {
-    const errorMsg = errorDesc || errorParam;
-    return NextResponse.redirect(
-      new URL(`/settings/connectors?error=${encodeURIComponent(`TikTok Auth Ditolak: ${errorMsg}`)}`, env.APP_URL)
-    );
-  }
-
-  const code = searchParams.get("code");
-  const state = searchParams.get("state");
-
-  if (!code || !state) {
-    return NextResponse.redirect(
-      new URL(`/settings/connectors?error=${encodeURIComponent("Parameter otentikasi TikTok tidak lengkap.")}`, env.APP_URL)
-    );
-  }
-
-  // Retrieve OAuth state from cookie
-  const cookieVal = request.cookies.get(TIKTOK_OAUTH_COOKIE)?.value;
-  if (!cookieVal) {
-    return NextResponse.redirect(
-      new URL(`/settings/connectors?error=${encodeURIComponent("Sesi otentikasi TikTok telah kedaluwarsa. Silakan coba lagi.")}`, env.APP_URL)
-    );
-  }
-
-  let oauthData: { state: string; codeVerifier: string; workspaceId: string; redirectUri: string };
-  try {
-    const jsonStr = Buffer.from(cookieVal, "base64url").toString("utf-8");
-    oauthData = JSON.parse(jsonStr);
-  } catch {
-    return NextResponse.redirect(
-      new URL(`/settings/connectors?error=${encodeURIComponent("Data sesi otentikasi TikTok rusak.")}`, env.APP_URL)
-    );
-  }
-
-  if (oauthData.state !== state) {
-    return NextResponse.redirect(
-      new URL(`/settings/connectors?error=${encodeURIComponent("Verifikasi keamanan CSRF (State mismatch) gagal.")}`, env.APP_URL)
-    );
-  }
-
-  const clientKey = env.TIKTOK_CLIENT_KEY;
-  const clientSecret = env.TIKTOK_CLIENT_SECRET;
-  if (!clientKey || !clientSecret) {
-    return NextResponse.redirect(
-      new URL(`/settings/connectors?error=${encodeURIComponent("Kredensial TikTok belum lengkap di server.")}`, env.APP_URL)
+  if (request.nextUrl.searchParams.get("error")) {
+    return withClearedCookie(
+      NextResponse.redirect(connectorRedirect(env.APP_URL, { error: "Login TikTok dibatalkan. Akun belum terhubung." }))
     );
   }
 
   try {
-    // Exchange Authorization Code for Access Token (PKCE)
-    const tokenRequestBody = new URLSearchParams({
-      client_key: clientKey,
-      client_secret: clientSecret,
-      code,
-      grant_type: "authorization_code",
-      redirect_uri: oauthData.redirectUri,
-      code_verifier: oauthData.codeVerifier
-    });
+    const session = await requireSession();
+    const code = request.nextUrl.searchParams.get("code");
+    const state = request.nextUrl.searchParams.get("state");
+    const sealed = request.cookies.get(TIKTOK_OAUTH_COOKIE)?.value;
+    if (!code || !state || !sealed) {
+      throw new Error("Sesi login TikTok tidak lengkap atau sudah kedaluwarsa. Silakan coba lagi.");
+    }
+    const saved = JSON.parse(
+      decryptSecret(sealed, env.ENVELOPE_MASTER_KEY, `oauth:tiktok:${session.sub}`)
+    ) as { state?: string; codeVerifier?: string };
+    if (!saved.state || !saved.codeVerifier || saved.state !== state) {
+      throw new Error("Sesi login TikTok tidak valid. Silakan coba lagi.");
+    }
+    const oauth = await verifyOAuthStateToken(state, env.SESSION_SECRET);
+    if (
+      oauth.provider !== "TIKTOK" ||
+      oauth.intent !== "TIKTOK" ||
+      oauth.sub !== session.sub ||
+      oauth.workspaceId !== session.workspaceId
+    ) {
+      throw new Error("Login TikTok tidak cocok dengan user atau workspace aktif.");
+    }
+    if (!env.TIKTOK_CLIENT_KEY || !env.TIKTOK_CLIENT_SECRET) {
+      throw new Error("Integrasi TikTok belum dikonfigurasi oleh administrator Routie.");
+    }
 
     const tokenResponse = await fetch("https://open.tiktokapis.com/v2/oauth/token/", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Cache-Control": "no-cache"
-      },
-      body: tokenRequestBody.toString()
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "Cache-Control": "no-cache" },
+      body: new URLSearchParams({
+        client_key: env.TIKTOK_CLIENT_KEY,
+        client_secret: env.TIKTOK_CLIENT_SECRET,
+        code,
+        grant_type: "authorization_code",
+        redirect_uri: oauth.redirectUri,
+        code_verifier: saved.codeVerifier
+      }).toString(),
+      signal: AbortSignal.timeout(30_000)
     });
-
-    const tokenData = (await tokenResponse.json()) as TikTokTokenResponse;
-
-    // Handle token error responses
-    if (!tokenResponse.ok || (tokenData.error && tokenData.error.code !== "ok" && tokenData.error.code !== "0")) {
-      const errMsg = tokenData.error?.message || tokenData.error_description || "Gagal menukar token dengan TikTok.";
-      return NextResponse.redirect(
-        new URL(`/settings/connectors?error=${encodeURIComponent(`Otorisasi TikTok Gagal: ${errMsg}`)}`, env.APP_URL)
-      );
+    const token = (await tokenResponse.json().catch(() => ({}))) as TikTokTokenResponse;
+    if (!tokenResponse.ok || isTikTokError(token) || !token.access_token || !token.open_id) {
+      throw new Error("TikTok belum dapat menyelesaikan koneksi akun. Silakan coba lagi beberapa saat.");
     }
 
-    const payload = tokenData.data || tokenData;
-    const accessToken = payload.access_token;
-    const refreshToken = payload.refresh_token;
-    const openId = payload.open_id;
-    const expiresIn = payload.expires_in || 86400; // default 24h
-
-    if (!accessToken || !openId) {
-      return NextResponse.redirect(
-        new URL(`/settings/connectors?error=${encodeURIComponent("TikTok tidak mengembalikan access token atau OpenID.")}`, env.APP_URL)
-      );
-    }
-
-    // Attempt to fetch TikTok profile for friendly display name
-    let accountName = `@tiktok_user_${openId.slice(-6)}`;
+    let accountName = `@tiktok_${token.open_id.slice(-6)}`;
     try {
-      const userInfoResponse = await fetch(
-        "https://open.tiktokapis.com/v2/user/info/?fields=open_id,union_id,avatar_url,display_name,username",
-        {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json"
-          }
-        }
+      const profileResponse = await fetch(
+        "https://open.tiktokapis.com/v2/user/info/?fields=open_id,display_name,username",
+        { headers: { Authorization: `Bearer ${token.access_token}` }, signal: AbortSignal.timeout(15_000) }
       );
-      if (userInfoResponse.ok) {
-        const userInfo = (await userInfoResponse.json()) as TikTokUserInfoResponse;
-        const user = userInfo.data?.user;
-        if (user?.display_name) {
-          accountName = `@${user.display_name}`;
-        } else if (user?.username) {
-          accountName = `@${user.username}`;
-        }
-      }
+      const profile = (await profileResponse.json().catch(() => ({}))) as TikTokUserInfoResponse;
+      const user = !isTikTokError(profile) ? profile.data?.user : null;
+      if (user?.username) accountName = `@${user.username.replace(/^@/, "")}`;
+      else if (user?.display_name) accountName = user.display_name;
     } catch {
-      // Non-blocking: fallback accountName will be used
+      // Profile display data is optional; the connection itself remains valid.
     }
 
-    // Encrypt tokens securely using envelope encryption
-    const encryptedAccessToken = encryptSecret(
-      accessToken,
-      env.ENVELOPE_MASTER_KEY,
-      `${oauthData.workspaceId}:TIKTOK:access-token`
-    );
-
-    const encryptedRefreshToken = refreshToken
-      ? encryptSecret(
-          refreshToken,
-          env.ENVELOPE_MASTER_KEY,
-          `${oauthData.workspaceId}:TIKTOK:refresh-token`
-        )
-      : null;
-
-    const tokenExpiresAt = new Date(Date.now() + expiresIn * 1000);
-
-    // Save to socialConnections table
     const db = createDatabase(env.DATABASE_URL);
-    await withTenant(db, oauthData.workspaceId, async (tx) => {
-      const existing = await tx
-        .select()
-        .from(socialConnections)
-        .where(
-          and(
-            eq(socialConnections.workspaceId, oauthData.workspaceId),
-            eq(socialConnections.channel, "TIKTOK")
-          )
-        )
-        .limit(1);
-
-      if (existing[0]) {
-        await tx
-          .update(socialConnections)
-          .set({
-            externalAccountId: openId,
-            accountName,
-            encryptedAccessToken,
-            encryptedRefreshToken,
-            tokenExpiresAt,
-            disconnectedAt: null,
-            updatedAt: new Date()
-          })
-          .where(eq(socialConnections.id, existing[0].id));
-      } else {
-        await tx.insert(socialConnections).values({
-          workspaceId: oauthData.workspaceId,
-          channel: "TIKTOK",
-          deliveryMode: "AUTO_PUBLISH",
-          externalAccountId: openId,
-          accountName,
-          encryptedAccessToken,
-          encryptedRefreshToken,
-          tokenExpiresAt,
-          connectedAt: new Date()
-        });
-      }
+    await persistTikTokConnection({
+      db,
+      workspaceId: session.workspaceId,
+      actorId: session.sub,
+      masterKey: env.ENVELOPE_MASTER_KEY,
+      openId: token.open_id,
+      accountName,
+      accessToken: token.access_token,
+      ...(token.refresh_token ? { refreshToken: token.refresh_token } : {}),
+      tokenExpiresAt: new Date(Date.now() + (token.expires_in ?? 86_400) * 1_000)
     });
-
-    // Clean up oauth cookie and redirect to connectors page with success status
-    const response = NextResponse.redirect(new URL("/settings/connectors?connected=TIKTOK", env.APP_URL));
-    response.cookies.delete(TIKTOK_OAUTH_COOKIE);
-    return response;
+    await resumeHeldSocialPublishJobs(db, session.workspaceId, ["TIKTOK"]);
+    return withClearedCookie(NextResponse.redirect(connectorRedirect(env.APP_URL, { connected: "TikTok" })));
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Terjadi kesalahan internal saat menghubungkan TikTok.";
-    const response = NextResponse.redirect(
-      new URL(`/settings/connectors?error=${encodeURIComponent(message)}`, env.APP_URL)
-    );
-    response.cookies.delete(TIKTOK_OAUTH_COOKIE);
-    return response;
+    const message = error instanceof Error ? error.message : "Gagal menyelesaikan login TikTok.";
+    return withClearedCookie(NextResponse.redirect(connectorRedirect(env.APP_URL, { error: message })));
   }
 }

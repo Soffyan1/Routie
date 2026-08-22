@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { and, eq, inArray, isNull } from "drizzle-orm";
-import { createDatabase, providerCredentials, withTenant } from "@routie/db";
+import { and, count, desc, eq, gte, inArray, isNull, ne, sql } from "drizzle-orm";
+import { auditEvents, createDatabase, providerCredentials, withTenant } from "@routie/db";
 import { providerCapabilitySchema } from "@routie/domain";
-import { getProviderAdapter } from "@routie/providers";
+import { getProviderAdapter, isZarkPilotEnabled, zarkPilotMonthlyImageLimit } from "@routie/providers";
 import { encryptSecret } from "@routie/security";
 import { requireSession } from "@/lib/auth";
 import { requireActiveEntitlement } from "@/lib/entitlement";
@@ -11,7 +11,7 @@ import { serverEnv } from "@/lib/env";
 import { apiError } from "@/lib/http";
 
 const fullCredentialSchema = z.object({
-  provider: z.enum(["OPENAI", "GEMINI", "ANTHROPIC"]),
+  provider: z.enum(["OPENAI", "GEMINI", "ANTHROPIC", "ZARK"]),
   capability: providerCapabilitySchema,
   model: z.string().min(1).max(100),
   apiKey: z.string().min(10).max(1_000)
@@ -24,9 +24,37 @@ const easyGoogleAiSchema = z.object({
 
 const mediaAssetSchema = z.object({
   type: z.literal("MEDIA_ASSET").optional(),
-  provider: z.enum(["OPENAI", "GEMINI"]).default("OPENAI"),
+  provider: z.enum(["OPENAI", "GEMINI", "ZARK"]).default("OPENAI"),
   apiKey: z.string().min(10).max(1_000)
 });
+
+type ProviderName = "OPENAI" | "GEMINI" | "ANTHROPIC" | "ZARK";
+
+function providerLabel(provider: ProviderName): string {
+  if (provider === "OPENAI") return "OpenAI";
+  if (provider === "GEMINI") return "Google AI";
+  if (provider === "ANTHROPIC") return "Anthropic";
+  return "Zark";
+}
+
+function assertZarkPilotAccess(
+  provider: ProviderName,
+  capability: string,
+  env: { NODE_ENV?: string; ENABLE_ZARK_PROVIDER?: string }
+): void {
+  if (provider !== "ZARK") return;
+  if (!isZarkPilotEnabled(env)) {
+    throw new Error("Zark Pilot hanya tersedia di development saat ENABLE_ZARK_PROVIDER=true.");
+  }
+  if (capability !== "IMAGE") {
+    throw new Error("Zark Pilot Routie saat ini hanya mendukung generasi gambar.");
+  }
+}
+
+function utcMonthStart(): Date {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+}
 
 export async function GET() {
   try {
@@ -54,9 +82,30 @@ export async function GET() {
         )
     );
 
-    const textOrSearchCred = credentials.find((c) => c.capability === "TEXT" || c.capability === "WEB_SEARCH");
-    const imageCred = credentials.find((c) => c.capability === "IMAGE");
-    const isConfigured = credentials.length > 0;
+    const zarkEnabled = isZarkPilotEnabled(env);
+    const visibleCredentials = credentials.filter((credential) => credential.provider !== "ZARK" || zarkEnabled);
+    const textOrSearchCred = visibleCredentials.find((c) => c.capability === "TEXT" || c.capability === "WEB_SEARCH");
+    const imageCred = visibleCredentials.find((c) => c.capability === "IMAGE");
+    const isConfigured = visibleCredentials.length > 0;
+    const monthlyLimit = zarkPilotMonthlyImageLimit(env);
+    let attemptsThisMonth = 0;
+
+    if (zarkEnabled) {
+      const [usage] = await withTenant(db, session.workspaceId, (tx) =>
+        tx
+          .select({ value: count() })
+          .from(auditEvents)
+          .where(
+            and(
+              eq(auditEvents.workspaceId, session.workspaceId),
+              eq(auditEvents.action, "CONTENT_MEDIA_GENERATION_STARTED"),
+              gte(auditEvents.createdAt, utcMonthStart()),
+              sql`${auditEvents.after}->>'provider' = 'ZARK'`
+            )
+          )
+      );
+      attemptsThisMonth = usage?.value ?? 0;
+    }
 
     return NextResponse.json({
       isConfigured,
@@ -73,11 +122,17 @@ export async function GET() {
         secretLastFour: imageCred?.secretLastFour ?? null,
         validatedAt: imageCred?.validatedAt ?? null
       },
-      provider: textOrSearchCred?.provider ?? credentials[0]?.provider ?? null,
-      secretLastFour: textOrSearchCred?.secretLastFour ?? credentials[0]?.secretLastFour ?? null,
-      validatedAt: textOrSearchCred?.validatedAt ?? credentials[0]?.validatedAt ?? null,
-      capabilities: credentials.map((c) => c.capability),
-      credentials
+      zarkPilot: {
+        enabled: zarkEnabled,
+        monthlyImageLimit: monthlyLimit,
+        attemptsThisMonth,
+        remainingThisMonth: Math.max(0, monthlyLimit - attemptsThisMonth)
+      },
+      provider: textOrSearchCred?.provider ?? visibleCredentials[0]?.provider ?? null,
+      secretLastFour: textOrSearchCred?.secretLastFour ?? visibleCredentials[0]?.secretLastFour ?? null,
+      validatedAt: textOrSearchCred?.validatedAt ?? visibleCredentials[0]?.validatedAt ?? null,
+      capabilities: visibleCredentials.map((c) => c.capability),
+      credentials: visibleCredentials
     });
   } catch (error) {
     return apiError(error);
@@ -99,14 +154,13 @@ export async function POST(request: NextRequest) {
       const parsed = mediaAssetSchema.parse(rawBody);
       const cleanKey = parsed.apiKey.trim();
       const provider = parsed.provider;
-      const model = provider === "OPENAI" ? "gpt-image-2" : "gemini-3.1-flash-image";
+      assertZarkPilotAccess(provider, "IMAGE", env);
+      const model = provider === "OPENAI" ? "gpt-image-2" : provider === "GEMINI" ? "gemini-3.1-flash-image" : "auto";
 
       const adapter = getProviderAdapter(provider);
       const isValid = await adapter.validateCredential(cleanKey);
       if (!isValid) {
-        throw new Error(
-          `Kunci API ${provider === "OPENAI" ? "OpenAI" : "Google"} tidak valid atau ditolak. Pastikan kunci disalin dengan benar.`
-        );
+        throw new Error(`Kunci API ${providerLabel(provider)} tidak valid atau ditolak. Pastikan kunci disalin dengan benar.`);
       }
 
       const encryptedSecret = encryptSecret(
@@ -116,6 +170,18 @@ export async function POST(request: NextRequest) {
       );
 
       await withTenant(db, session.workspaceId, async (tx) => {
+        const now = new Date();
+        await tx
+          .update(providerCredentials)
+          .set({ disabledAt: now, updatedAt: now })
+          .where(
+            and(
+              eq(providerCredentials.workspaceId, session.workspaceId),
+              eq(providerCredentials.capability, "IMAGE"),
+              ne(providerCredentials.provider, provider),
+              isNull(providerCredentials.disabledAt)
+            )
+          );
         await tx
           .insert(providerCredentials)
           .values({
@@ -129,7 +195,7 @@ export async function POST(request: NextRequest) {
             disabledAt: null
           })
           .onConflictDoUpdate({
-            target: [providerCredentials.workspaceId, providerCredentials.capability],
+            target: [providerCredentials.workspaceId, providerCredentials.provider, providerCredentials.capability],
             set: {
               provider,
               model,
@@ -145,7 +211,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           success: true,
-          message: `Kunci API ${provider === "OPENAI" ? "OpenAI" : "Google AI"} untuk generasi aset media sosial berhasil dihubungkan!`,
+          message: `Kunci API ${providerLabel(provider)} untuk generasi aset media sosial berhasil dihubungkan!`,
           provider,
           model,
           secretLastFour: cleanKey.slice(-4),
@@ -175,6 +241,18 @@ export async function POST(request: NextRequest) {
 
       await withTenant(db, session.workspaceId, async (tx) => {
         for (const item of defaultGeminiCapabilities) {
+          const now = new Date();
+          await tx
+            .update(providerCredentials)
+            .set({ disabledAt: now, updatedAt: now })
+            .where(
+              and(
+                eq(providerCredentials.workspaceId, session.workspaceId),
+                eq(providerCredentials.capability, item.capability),
+                ne(providerCredentials.provider, "GEMINI"),
+                isNull(providerCredentials.disabledAt)
+              )
+            );
           const encryptedSecret = encryptSecret(
             cleanKey,
             env.ENVELOPE_MASTER_KEY,
@@ -194,7 +272,7 @@ export async function POST(request: NextRequest) {
               disabledAt: null
             })
             .onConflictDoUpdate({
-              target: [providerCredentials.workspaceId, providerCredentials.capability],
+              target: [providerCredentials.workspaceId, providerCredentials.provider, providerCredentials.capability],
               set: {
                 provider: "GEMINI",
                 model: item.model,
@@ -223,6 +301,7 @@ export async function POST(request: NextRequest) {
     // Case C: Explicit custom capability payload
     const input = fullCredentialSchema.parse(rawBody);
     const cleanApiKey = input.apiKey.trim();
+    assertZarkPilotAccess(input.provider, input.capability, env);
     const adapter = getProviderAdapter(input.provider);
     const model = adapter.listModels().find((candidate) => candidate.id === input.model);
     if (!model || !model.capabilities.includes(input.capability)) {
@@ -238,8 +317,20 @@ export async function POST(request: NextRequest) {
       `${session.workspaceId}:${input.provider}:${input.capability}`
     );
 
-    const [credential] = await withTenant(db, session.workspaceId, (tx) =>
-      tx
+    const [credential] = await withTenant(db, session.workspaceId, async (tx) => {
+      const now = new Date();
+      await tx
+        .update(providerCredentials)
+        .set({ disabledAt: now, updatedAt: now })
+        .where(
+          and(
+            eq(providerCredentials.workspaceId, session.workspaceId),
+            eq(providerCredentials.capability, input.capability),
+            ne(providerCredentials.provider, input.provider),
+            isNull(providerCredentials.disabledAt)
+          )
+        );
+      return tx
         .insert(providerCredentials)
         .values({
           workspaceId: session.workspaceId,
@@ -251,7 +342,7 @@ export async function POST(request: NextRequest) {
           validatedAt: new Date()
         })
         .onConflictDoUpdate({
-          target: [providerCredentials.workspaceId, providerCredentials.capability],
+          target: [providerCredentials.workspaceId, providerCredentials.provider, providerCredentials.capability],
           set: {
             provider: input.provider,
             model: input.model,
@@ -269,8 +360,8 @@ export async function POST(request: NextRequest) {
           model: providerCredentials.model,
           secretLastFour: providerCredentials.secretLastFour,
           validatedAt: providerCredentials.validatedAt
-        })
-    );
+        });
+    });
 
     return NextResponse.json({ credential }, { status: 201 });
   } catch (error) {
@@ -289,6 +380,49 @@ export async function DELETE(request: NextRequest) {
 
     const env = serverEnv();
     const db = createDatabase(env.DATABASE_URL);
+
+    if (target === "zark-pilot") {
+      const restoredProvider = await withTenant(db, session.workspaceId, async (tx) => {
+        await tx
+          .delete(providerCredentials)
+          .where(
+            and(
+              eq(providerCredentials.workspaceId, session.workspaceId),
+              eq(providerCredentials.provider, "ZARK"),
+              eq(providerCredentials.capability, "IMAGE")
+            )
+          );
+
+        const [fallback] = await tx
+          .select({ id: providerCredentials.id, provider: providerCredentials.provider })
+          .from(providerCredentials)
+          .where(
+            and(
+              eq(providerCredentials.workspaceId, session.workspaceId),
+              eq(providerCredentials.capability, "IMAGE"),
+              ne(providerCredentials.provider, "ZARK")
+            )
+          )
+          .orderBy(desc(providerCredentials.updatedAt))
+          .limit(1);
+
+        if (fallback) {
+          await tx
+            .update(providerCredentials)
+            .set({ disabledAt: null, updatedAt: new Date() })
+            .where(eq(providerCredentials.id, fallback.id));
+        }
+        return fallback?.provider ?? null;
+      });
+
+      return NextResponse.json({
+        success: true,
+        restoredProvider,
+        message: restoredProvider
+          ? `Zark Pilot dihentikan. Provider ${providerLabel(restoredProvider)} sebelumnya sudah diaktifkan kembali.`
+          : "Zark Pilot dihentikan. Belum ada provider gambar sebelumnya untuk dipulihkan."
+      });
+    }
 
     if (target === "media") {
       await withTenant(db, session.workspaceId, (tx) =>

@@ -9,9 +9,7 @@ import {
   channelVariants,
   contentConcepts,
   createDatabase,
-  publishJobs,
-  providerCredentials,
-  socialConnections
+  providerCredentials
 } from "@routie/db";
 import { withTenant } from "@routie/db";
 import { assertTransition, contentStateSchema } from "@routie/domain";
@@ -21,6 +19,7 @@ import { serverEnv } from "@/lib/env";
 import { apiError } from "@/lib/http";
 import { buildImagePrompt } from "@/lib/media-generation";
 import { generationQueue, publishingQueue } from "@/lib/queue";
+import { preparePublishJobs } from "@/lib/publish-scheduling";
 
 const transitionSchema = z.object({
   to: contentStateSchema,
@@ -64,6 +63,11 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
             )
             .where(and(eq(channelVariants.id, decision.variantId), eq(channelVariants.conceptId, id), eq(channelVariants.workspaceId, session.workspaceId)));
         }
+      } else if (input.to === "APPROVED") {
+        await tx
+          .update(channelVariants)
+          .set({ approvedAt: new Date(), approvedBy: session.sub, updatedAt: new Date() })
+          .where(and(eq(channelVariants.conceptId, id), eq(channelVariants.workspaceId, session.workspaceId), isNull(channelVariants.rejectedAt)));
       }
 
       if (["IDEA_APPROVED", "APPROVED", "REJECTED"].includes(input.to)) {
@@ -78,8 +82,29 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
           entityVersion: concept.concept.version
         });
       }
+
+      let targetState = (input.to === "APPROVED" && concept.scheduledFor) ? "SCHEDULED" : input.to;
       const nextVersion = concept.concept.version + 1;
-      await tx.update(contentConcepts).set({ state: input.to, version: nextVersion, heldReason: input.to === "HELD" ? input.reason : null, updatedAt: new Date() }).where(and(eq(contentConcepts.id, id), eq(contentConcepts.workspaceId, session.workspaceId)));
+
+      let preparedPublishJobs: Awaited<ReturnType<typeof preparePublishJobs>> = [];
+      if (targetState === "SCHEDULED") {
+        if (!concept.scheduledFor) throw new Error("Calendar slot has no publish timestamp");
+        preparedPublishJobs = await preparePublishJobs(tx, {
+          workspaceId: session.workspaceId,
+          conceptId: id,
+          scheduledFor: concept.scheduledFor
+        });
+        if (preparedPublishJobs.length === 0 || !preparedPublishJobs.some((job) => job.queued)) {
+          targetState = "HELD";
+        }
+      }
+
+      const heldReason = targetState === "HELD"
+        ? (preparedPublishJobs.length > 0
+            ? "Hubungkan akun sosial media tujuan agar konten dapat diterbitkan."
+            : input.reason)
+        : null;
+      await tx.update(contentConcepts).set({ state: targetState, version: nextVersion, heldReason, updatedAt: new Date() }).where(and(eq(contentConcepts.id, id), eq(contentConcepts.workspaceId, session.workspaceId)));
       await tx.insert(auditEvents).values({
         workspaceId: session.workspaceId,
         actorId: session.sub,
@@ -87,21 +112,24 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
         entityType: "content_concept",
         entityId: id,
         before: { state: concept.concept.state },
-        after: { state: input.to, reason: input.reason }
+        after: { state: targetState, reason: heldReason ?? input.reason }
       });
 
+      let finalState = targetState;
       let mediaGeneration: null | { credentialId: string; model: string; prompt: string; version: number } = null;
-      if (input.to === "IDEA_APPROVED") {
+      if (targetState === "IDEA_APPROVED") {
         const [[credential], [profile]] = await Promise.all([
           tx.select().from(providerCredentials).where(and(eq(providerCredentials.workspaceId, session.workspaceId), eq(providerCredentials.capability, "IMAGE"), isNull(providerCredentials.disabledAt))).limit(1),
           tx.select().from(brandProfiles).where(eq(brandProfiles.workspaceId, session.workspaceId)).limit(1)
         ]);
         if (credential && profile) {
+          finalState = "GENERATING";
           mediaGeneration = {
             credentialId: credential.id,
             model: credential.model,
             version: nextVersion,
             prompt: buildImagePrompt({
+              ...profile,
               businessName: profile.businessName,
               brief: profile.brief,
               targetAudience: profile.targetAudience,
@@ -114,40 +142,27 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
               contentPillar: concept.concept.contentPillar
             })
           };
+          await tx
+            .update(contentConcepts)
+            .set({ state: "GENERATING", heldReason: null, updatedAt: new Date() })
+            .where(and(eq(contentConcepts.id, id), eq(contentConcepts.workspaceId, session.workspaceId)));
           await tx.insert(auditEvents).values({
             workspaceId: session.workspaceId,
             actorId: session.sub,
             action: "CONTENT_MEDIA_QUEUED",
             entityType: "content_concept",
             entityId: id,
-            after: { provider: credential.provider, model: credential.model, version: nextVersion }
+            after: { provider: credential.provider, model: credential.model, version: nextVersion, state: "GENERATING" }
           });
         }
       }
 
-      if (input.to !== "SCHEDULED") return { publishJobs: [], mediaGeneration };
-      if (!concept.scheduledFor) throw new Error("Calendar slot has no publish timestamp");
-      const variants = await tx.select().from(channelVariants).where(and(eq(channelVariants.conceptId, id), eq(channelVariants.workspaceId, session.workspaceId)));
-      const approved = variants.filter((variant) => variant.approvedAt && !variant.rejectedAt);
-      if (approved.length === 0) throw new Error("At least one channel variant must be approved before scheduling");
-      const connections = await tx.select().from(socialConnections).where(eq(socialConnections.workspaceId, session.workspaceId));
-      const jobs = [];
-      for (const variant of approved) {
-        const connection = connections.find((candidate) => candidate.channel === variant.channel && !candidate.disconnectedAt);
-        const idempotencyKey = `${variant.id}:${concept.scheduledFor.toISOString()}:v${variant.version}`;
-        const [job] = await tx
-          .insert(publishJobs)
-          .values({ workspaceId: session.workspaceId, variantId: variant.id, connectionId: connection?.id, scheduledFor: concept.scheduledFor, idempotencyKey })
-          .onConflictDoNothing({ target: publishJobs.idempotencyKey })
-          .returning();
-        if (job) jobs.push(job);
-      }
-      return { publishJobs: jobs, mediaGeneration };
+      return { publishJobs: preparedPublishJobs, mediaGeneration, finalState };
     });
 
     const queue = publishingQueue();
     await Promise.all(
-      queued.publishJobs.map((job) =>
+      queued.publishJobs.filter((job) => job.queued).map((job) =>
         queue.add("publish", { workspaceId: session.workspaceId, publishJobId: job.id }, { jobId: job.id, delay: Math.max(0, job.scheduledFor.getTime() - Date.now()), attempts: 3, backoff: { type: "exponential", delay: 5_000 } })
       )
     );
@@ -164,9 +179,9 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
           idempotencyKey: `concept-media:${id}:v${media.version}`
         },
         target: { kind: "CONCEPT_MEDIA", conceptId: id }
-      }, { jobId: `media-${id}-v${media.version}`, attempts: 3, backoff: { type: "exponential", delay: 5_000 } });
+      }, { jobId: `media-${id}-v${media.version}`, attempts: 2, backoff: { type: "exponential", delay: 15_000 } });
     }
-    return NextResponse.json({ state: input.to, publishJobsQueued: queued.publishJobs.length, mediaQueued: Boolean(queued.mediaGeneration) });
+    return NextResponse.json({ state: queued.finalState, publishJobsQueued: queued.publishJobs.length, mediaQueued: Boolean(queued.mediaGeneration) });
   } catch (error) {
     return apiError(error);
   }

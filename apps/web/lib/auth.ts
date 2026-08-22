@@ -7,6 +7,19 @@ import { serverEnv } from "./env";
 
 export const SESSION_COOKIE = "routie_session";
 
+export class SessionExpiredError extends Error {
+  constructor() {
+    super("Session has expired");
+    this.name = "SessionExpiredError";
+  }
+}
+
+export function isSessionAuthError(error: unknown): boolean {
+  if (error instanceof SessionExpiredError) return true;
+  const message = error instanceof Error ? error.message : "";
+  return /session is required|session has expired/i.test(message);
+}
+
 export async function requireSession(): Promise<SessionClaims> {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
   const env = serverEnv();
@@ -16,7 +29,16 @@ export async function requireSession(): Promise<SessionClaims> {
     }
     throw new Error("Session is required");
   }
-  const session = await verifySessionToken(token, env.SESSION_SECRET);
+  let session: SessionClaims;
+  try {
+    session = await verifySessionToken(token, env.SESSION_SECRET);
+  } catch (error) {
+    const errorCode = typeof error === "object" && error ? (error as { code?: string }).code : undefined;
+    if (errorCode === "ERR_JWT_EXPIRED" || /"exp" claim timestamp check failed/i.test(error instanceof Error ? error.message : "")) {
+      throw new SessionExpiredError();
+    }
+    throw error;
+  }
   const db = createDatabase(env.DATABASE_URL);
   const { membership, entitlement } = await withTenant(db, session.workspaceId, async (tx) => ({
     membership: (await tx.select({ role: memberships.role }).from(memberships).where(and(eq(memberships.userId, session.sub), eq(memberships.workspaceId, session.workspaceId))).limit(1))[0],

@@ -2,11 +2,13 @@ import type { AIProviderAdapter, ProviderCapability } from "@routie/domain";
 import { AnthropicAdapter } from "./anthropic";
 import { GeminiAdapter } from "./gemini";
 import { OpenAIAdapter } from "./openai";
+import { ZarkAdapter } from "./zark";
 
 const adapters: Record<AIProviderAdapter["provider"], AIProviderAdapter> = {
   OPENAI: new OpenAIAdapter(),
   GEMINI: new GeminiAdapter(),
-  ANTHROPIC: new AnthropicAdapter()
+  ANTHROPIC: new AnthropicAdapter(),
+  ZARK: new ZarkAdapter()
 };
 
 export function getProviderAdapter(provider: keyof typeof adapters): AIProviderAdapter {

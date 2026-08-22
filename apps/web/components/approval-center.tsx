@@ -294,10 +294,11 @@ export function ApprovalCenter({
             <Clock size={18} />
           </div>
           <div className="crm-filter-info">
-            <span className="crm-filter-label">MENUNGGU KEPUTUSAN</span>
+            <span className="crm-filter-label">Menunggu keputusan</span>
             <span className="crm-filter-val">{String(counts.pending).padStart(2, "0")}</span>
+            <span className="crm-filter-caption">Butuh ditinjau hari ini</span>
           </div>
-          <span className="crm-filter-indicator" />
+          <span className="crm-filter-indicator">Aktif</span>
         </button>
 
         <button
@@ -309,10 +310,11 @@ export function ApprovalCenter({
             <CheckCircle2 size={18} />
           </div>
           <div className="crm-filter-info">
-            <span className="crm-filter-label">TELAH DISETUJUI</span>
+            <span className="crm-filter-label">Telah disetujui</span>
             <span className="crm-filter-val">{String(counts.approved).padStart(2, "0")}</span>
+            <span className="crm-filter-caption">Siap lanjut ke proses berikutnya</span>
           </div>
-          <span className="crm-filter-indicator" />
+          <span className="crm-filter-indicator">Selesai</span>
         </button>
 
         <button
@@ -324,10 +326,11 @@ export function ApprovalCenter({
             <XCircle size={18} />
           </div>
           <div className="crm-filter-info">
-            <span className="crm-filter-label">DITOLAK / PERLU REVISI</span>
+            <span className="crm-filter-label">Ditolak / perlu revisi</span>
             <span className="crm-filter-val">{String(counts.rejected).padStart(2, "0")}</span>
+            <span className="crm-filter-caption">Perlu perhatian dari tim</span>
           </div>
-          <span className="crm-filter-indicator" />
+          <span className="crm-filter-indicator">Perlu aksi</span>
         </button>
       </section>
 
@@ -335,6 +338,13 @@ export function ApprovalCenter({
       <section className="crm-card crm-approval-workspace">
         {/* Left Column: Master Queue List */}
         <aside className="crm-approval-master">
+          <div className="crm-approval-master-head">
+            <div>
+              <h3>Antrian konten</h3>
+              <p>Pilih item untuk melihat detail</p>
+            </div>
+            <span>{visible.length} item</span>
+          </div>
           <div className="crm-master-toolbar">
             <div className="crm-search-box">
               <Search size={14} />

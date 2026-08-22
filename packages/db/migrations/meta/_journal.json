@@ -50,6 +50,69 @@
       "when": 1787200800000,
       "tag": "0006_social_insights",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1787287200000,
+      "tag": "0007_settings_expansion",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787287201000,
+      "tag": "0008_low_iron_lad",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1787287202000,
+      "tag": "0009_bumpy_winter_soldier",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1787287203000,
+      "tag": "0010_lovely_groot",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1787287204000,
+      "tag": "0011_happy_stranger",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1787287205000,
+      "tag": "0012_friendly_blazing_skull",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1787302266571,
+      "tag": "0013_powerful_khan",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1787386113979,
+      "tag": "0014_common_nemesis",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1787391147401,
+      "tag": "0015_absent_swarm",
+      "breakpoints": true
     }
   ]
 }

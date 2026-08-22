@@ -1,13 +1,10 @@
 import Link from "next/link";
-import {
-  Bell,
-  Settings
-} from "lucide-react";
+import { Bell } from "lucide-react";
 import { connection } from "next/server";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { contentConcepts, createDatabase, notifications, users, withTenant, workspaces } from "@routie/db";
 import type { WorkspaceRole } from "@routie/domain";
-import { requireSession } from "@/lib/auth";
+import { requirePageSession } from "@/lib/page-auth";
 import { serverEnv } from "@/lib/env";
 
 interface AppShellIdentity {
@@ -23,7 +20,7 @@ function initials(value: string): string {
 }
 
 async function loadIdentity(): Promise<AppShellIdentity> {
-  const session = await requireSession();
+  const session = await requirePageSession();
   const db = createDatabase(serverEnv().DATABASE_URL);
   return withTenant(db, session.workspaceId, async (tx) => {
     const [identity, approvals, unread] = await Promise.all([
@@ -42,6 +39,8 @@ async function loadIdentity(): Promise<AppShellIdentity> {
 }
 
 import { SidebarNav } from "./sidebar-nav";
+import { NotificationBell } from "./notification-bell";
+import { LogoutConfirmation } from "./logout-confirmation";
 
 export async function AppShell({
   children,
@@ -84,9 +83,7 @@ export async function AppShell({
               <span className="crm-user-name">{identity.userName}</span>
               <span className="crm-user-role">{identity.role.toLowerCase()}</span>
             </div>
-            <Link href="/settings/brand-identity" className="crm-user-settings-btn" title="Settings">
-              <Settings size={15} />
-            </Link>
+            <LogoutConfirmation />
           </div>
         </div>
       </aside>
@@ -104,10 +101,7 @@ export async function AppShell({
           </div>
 
           <div className="crm-header-right">
-            <button className="crm-icon-btn" aria-label="Notifications" title="Notifications">
-              <Bell size={17} />
-              {identity.unreadCount > 0 && <span className="crm-bell-dot" />}
-            </button>
+            <NotificationBell initialUnreadCount={identity.unreadCount} />
           </div>
         </header>
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Calendar,
   CalendarDays,
@@ -64,24 +64,45 @@ export function CalendarGrid() {
   const [createModalDate, setCreateModalDate] = useState<string | undefined>(undefined);
 
   // Fetch calendar data
-  async function fetchCalendar(year: number, month: number) {
-    setLoading(true);
+  const fetchCalendar = useCallback(async (year: number, month: number, options?: { silent?: boolean }) => {
+    if (!options?.silent) setLoading(true);
     try {
       const res = await fetch(`/api/calendar?year=${year}&month=${month}`);
       if (res.ok) {
         const data = (await res.json()) as CalendarData;
         setCalendarData(data);
+        setSelectedConcept((current) =>
+          current ? data.concepts.find((concept) => concept.id === current.id) ?? null : null
+        );
       }
     } catch {
       // ignore
     } finally {
-      setLoading(false);
+      if (!options?.silent) setLoading(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
-    fetchCalendar(currentYear, currentMonth);
-  }, [currentYear, currentMonth]);
+    void fetchCalendar(currentYear, currentMonth);
+  }, [currentYear, currentMonth, fetchCalendar]);
+
+  const hasActiveGeneration = useMemo(
+    () =>
+      calendarData?.concepts.some(
+        (concept) =>
+          concept.state === "GENERATING" ||
+          (concept.state === "IDEA_DRAFT" && concept.topic === "Menyusun ide konten...")
+      ) ?? false,
+    [calendarData]
+  );
+
+  useEffect(() => {
+    if (!hasActiveGeneration) return;
+    const interval = window.setInterval(() => {
+      void fetchCalendar(currentYear, currentMonth, { silent: true });
+    }, 4_000);
+    return () => window.clearInterval(interval);
+  }, [currentYear, currentMonth, fetchCalendar, hasActiveGeneration]);
 
   // Navigation handlers
   function handlePrevMonth() {
@@ -136,13 +157,12 @@ export function CalendarGrid() {
       }
       // Status
       if (statusFilter !== "ALL") {
-        if (statusFilter === "READY" && !["APPROVED", "SCHEDULED"].includes(c.state)) return false;
+        if (statusFilter === "SCHEDULED" && !["APPROVED", "SCHEDULED"].includes(c.state)) return false;
         if (statusFilter === "DRAFT" && c.state !== "IDEA_DRAFT") return false;
-        if (statusFilter === "IDEA_REVIEW" && c.state !== "IDEA_REVIEW") return false;
-        if (statusFilter === "FINAL_REVIEW" && c.state !== "FINAL_REVIEW") return false;
         if (statusFilter === "REVIEW" && !["IDEA_REVIEW", "FINAL_REVIEW"].includes(c.state)) return false;
-        if (statusFilter === "GENERATING" && !["IDEA_APPROVED", "GENERATING"].includes(c.state)) return false;
+        if (statusFilter === "PREPARING" && !["IDEA_APPROVED", "GENERATING", "IDEA_DRAFT"].includes(c.state)) return false;
         if (statusFilter === "PUBLISHED" && c.state !== "PUBLISHED") return false;
+        if (statusFilter === "ACTION_REQUIRED" && !["HELD", "FAILED"].includes(c.state)) return false;
       }
       // Format
       if (formatFilter !== "ALL") {
@@ -226,6 +246,8 @@ export function CalendarGrid() {
       case "APPROVED":
       case "SCHEDULED":
         return "green";
+      case "PUBLISHING":
+        return "purple";
       case "PUBLISHED":
         return "indigo";
       case "FINAL_REVIEW":
@@ -309,44 +331,28 @@ export function CalendarGrid() {
         <div className="crm-cal-summary-item">
           <span className="crm-cal-stat-label green">
             <span className="crm-status-dot green" />
-            Ready to Publish
+            Dijadwalkan
           </span>
           <b className="crm-cal-stat-num green">{calendarData?.summary?.ready ?? 0}</b>
         </div>
         <div className="crm-cal-summary-item">
           <span className="crm-cal-stat-label amber">
             <span className="crm-status-dot amber" />
-            Review Ide
+            Menunggu Persetujuan
           </span>
-          <b className="crm-cal-stat-num amber">{calendarData?.summary?.ideaReview ?? calendarData?.summary?.review ?? 0}</b>
-        </div>
-        <div className="crm-cal-summary-item">
-          <span className="crm-cal-stat-label orange">
-            <span className="crm-status-dot orange" />
-            Approval Konten
-          </span>
-          <b className="crm-cal-stat-num orange" style={{ color: "#C2410C", background: "#FFF7ED", borderColor: "#FED7AA" }}>
-            {calendarData?.summary?.finalReview ?? 0}
-          </b>
+          <b className="crm-cal-stat-num amber">{calendarData?.summary?.review ?? 0}</b>
         </div>
         <div className="crm-cal-summary-item">
           <span className="crm-cal-stat-label purple">
             <span className="crm-status-dot purple" />
-            Sedang Generate
+            Sedang Disiapkan
           </span>
           <b className="crm-cal-stat-num purple">{calendarData?.summary?.generating ?? 0}</b>
         </div>
         <div className="crm-cal-summary-item">
-          <span className="crm-cal-stat-label gray">
-            <span className="crm-status-dot gray" />
-            Draft Ide
-          </span>
-          <b className="crm-cal-stat-num gray">{calendarData?.summary?.draft ?? 0}</b>
-        </div>
-        <div className="crm-cal-summary-item">
           <span className="crm-cal-stat-label indigo">
             <span className="crm-status-dot indigo" />
-            Published
+            Sudah Terbit
           </span>
           <b className="crm-cal-stat-num indigo">{calendarData?.summary?.published ?? 0}</b>
         </div>
@@ -400,12 +406,12 @@ export function CalendarGrid() {
               className="crm-cal-select"
             >
               <option value="ALL">Semua Status</option>
-              <option value="READY">🟢 Ready to Publish</option>
-              <option value="IDEA_REVIEW">🟡 Perlu Review Ide (Teks)</option>
-              <option value="FINAL_REVIEW">🟠 Perlu Approval Konten (Visual)</option>
-              <option value="GENERATING">🟣 Sedang Generate</option>
-              <option value="DRAFT">⚪ Draft Ide</option>
-              <option value="PUBLISHED">🔵 Published</option>
+              <option value="SCHEDULED">🟢 Dijadwalkan</option>
+              <option value="REVIEW">🟡 Menunggu Persetujuan</option>
+              <option value="PREPARING">🟣 Sedang Disiapkan</option>
+              <option value="DRAFT">⚪ Draf</option>
+              <option value="PUBLISHED">🔵 Sudah Terbit</option>
+              <option value="ACTION_REQUIRED">🔴 Perlu Tindakan</option>
             </select>
           </div>
 

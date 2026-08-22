@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq, isNull } from "drizzle-orm";
 import { createDatabase, providerCredentials, withTenant } from "@routie/db";
-import { getProviderAdapter } from "@routie/providers";
+import { getProviderAdapter, isZarkPilotEnabled } from "@routie/providers";
 import { decryptSecret } from "@routie/security";
 import { requireSession } from "@/lib/auth";
 import { requireActiveEntitlement } from "@/lib/entitlement";
@@ -15,11 +15,17 @@ export async function POST(request: NextRequest) {
 
     const body = (await request.json().catch(() => ({}))) as {
       apiKey?: string;
-      provider?: "GEMINI" | "OPENAI" | "ANTHROPIC";
+      provider?: "GEMINI" | "OPENAI" | "ANTHROPIC" | "ZARK";
       target?: "GOOGLE_AI" | "MEDIA_ASSET";
     };
     const env = serverEnv();
     const provider = body.provider || "GEMINI";
+    if (provider === "ZARK" && !isZarkPilotEnabled(env)) {
+      return NextResponse.json(
+        { success: false, message: "Zark Pilot sedang dinonaktifkan di environment ini." },
+        { status: 404 }
+      );
+    }
     const adapter = getProviderAdapter(provider);
 
     // Case 1: Test key provided directly in request body (e.g. from input before saving)
@@ -31,7 +37,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(
           {
             success: false,
-            message: `Kunci API ${provider === "OPENAI" ? "OpenAI" : "Google AI"} tidak valid atau ditolak. Pastikan kunci disalin dengan benar.`
+            message: `Kunci API ${provider === "OPENAI" ? "OpenAI" : provider === "ZARK" ? "Zark" : "Google AI"} tidak valid atau ditolak. Pastikan kunci disalin dengan benar.`
           },
           { status: 400 }
         );
@@ -39,7 +45,7 @@ export async function POST(request: NextRequest) {
 
       return NextResponse.json({
         success: true,
-        message: `Koneksi ke ${provider === "OPENAI" ? "OpenAI" : "Google AI"} berhasil! Kunci API aktif dan valid.`
+        message: `Koneksi ke ${provider === "OPENAI" ? "OpenAI" : provider === "ZARK" ? "Zark" : "Google AI"} berhasil! Kunci API aktif dan valid.`
       });
     }
 
@@ -67,6 +73,13 @@ export async function POST(request: NextRequest) {
           success: false,
           message: `Belum ada kunci API ${body.target === "MEDIA_ASSET" ? "generasi aset media" : "Google AI"} yang tersimpan di workspace ini.`
         },
+        { status: 404 }
+      );
+    }
+
+    if (stored[0].provider === "ZARK" && !isZarkPilotEnabled(env)) {
+      return NextResponse.json(
+        { success: false, message: "Zark Pilot sedang dinonaktifkan di environment ini." },
         { status: 404 }
       );
     }

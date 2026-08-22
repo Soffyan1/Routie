@@ -25,7 +25,8 @@ const updateWorkspaceSchema = z.object({
   name: z.string().min(2).max(100),
   timezone: z.string().min(2).max(100),
   language: z.string().min(2).max(20),
-  maxConceptsPerDay: z.number().int().min(1).max(10).default(3)
+  maxConceptsPerDay: z.number().int().min(1).max(10).default(3),
+  publicationMode: z.enum(["SAFE", "AUTOMATIC"]).default("SAFE")
 });
 
 export async function PUT(request: NextRequest) {
@@ -46,6 +47,7 @@ export async function PUT(request: NextRequest) {
           timezone: input.timezone,
           language: input.language,
           maxConceptsPerDay: input.maxConceptsPerDay,
+          publicationMode: input.publicationMode,
           updatedAt: new Date()
         })
         .where(eq(workspaces.id, session.workspaceId))

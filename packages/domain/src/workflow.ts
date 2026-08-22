@@ -50,3 +50,25 @@ const permissions: Record<WorkspaceRole, ReadonlySet<ContentPermission>> = {
 export function hasPermission(role: WorkspaceRole, permission: ContentPermission): boolean {
   return permissions[role].has(permission);
 }
+
+export type WorkspacePermission = "GENERATE_CONTENT" | "APPROVE_CONTENT" | "EDIT_BRAND" | "MANAGE_API_KEYS" | "MANAGE_SOCIAL_CONNECTIONS" | "MANAGE_TEAM" | "VIEW_ANALYTICS";
+
+const workspacePermissions: Record<WorkspaceRole, ReadonlySet<WorkspacePermission>> = {
+  OWNER: new Set(["GENERATE_CONTENT", "APPROVE_CONTENT", "EDIT_BRAND", "MANAGE_API_KEYS", "MANAGE_SOCIAL_CONNECTIONS", "MANAGE_TEAM", "VIEW_ANALYTICS"]),
+  EDITOR: new Set(["GENERATE_CONTENT", "EDIT_BRAND", "MANAGE_SOCIAL_CONNECTIONS", "VIEW_ANALYTICS"]),
+  APPROVER: new Set(["APPROVE_CONTENT", "VIEW_ANALYTICS"])
+};
+
+export function hasWorkspacePermission(role: WorkspaceRole, permission: WorkspacePermission): boolean {
+  return workspacePermissions[role].has(permission);
+}
+
+export const workspacePermissionMatrix = [
+  { permission: "GENERATE_CONTENT", label: "Generate Ide & Konsep AI" },
+  { permission: "APPROVE_CONTENT", label: "Review & Setujui Konsep (Approval Center)" },
+  { permission: "EDIT_BRAND", label: "Ubah Identitas Brand & Template" },
+  { permission: "MANAGE_API_KEYS", label: "Kelola Kunci API & Media Engine" },
+  { permission: "MANAGE_SOCIAL_CONNECTIONS", label: "Hubungkan Channel Sosial Media" },
+  { permission: "MANAGE_TEAM", label: "Undang & Hapus Anggota Tim" },
+  { permission: "VIEW_ANALYTICS", label: "Melihat Statistik & Laporan Performa" }
+] as const;

@@ -75,6 +75,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
         .where(eq(contentConcepts.id, id));
 
       const basePrompt = buildImagePrompt({
+        ...row.profile,
         businessName: row.profile.businessName,
         brief: row.profile.brief,
         targetAudience: row.profile.targetAudience,
@@ -116,7 +117,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
         },
         target: { kind: "CONCEPT_MEDIA", conceptId: id }
       },
-      { jobId, attempts: 3, backoff: { type: "exponential", delay: 5_000 } }
+      { jobId, attempts: 2, backoff: { type: "exponential", delay: 15_000 } }
     );
 
     return NextResponse.json({

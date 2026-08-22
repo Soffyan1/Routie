@@ -24,3 +24,8 @@ export function generateState(): string {
 }
 
 export const TIKTOK_OAUTH_COOKIE = "routie_tiktok_oauth";
+export const YOUTUBE_OAUTH_COOKIE = "routie_youtube_oauth";
+export const GOOGLE_LOGIN_OAUTH_COOKIE = "routie_google_login_oauth";
+export const META_OAUTH_COOKIE = "routie_meta_oauth";
+export const META_SELECTION_COOKIE = "routie_meta_selection";
+export const THREADS_OAUTH_COOKIE = "routie_threads_oauth";

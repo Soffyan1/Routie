@@ -31,10 +31,10 @@ export function generationQueue() {
   globalQueue.routieGenerationQueue ??= new Queue("routie-generation", {
     connection: redisConnection(),
     defaultJobOptions: {
-      attempts: 5,
+      attempts: 2,
       backoff: {
         type: "exponential",
-        delay: 3_000
+        delay: 15_000
       },
       removeOnComplete: { count: 500 },
       removeOnFail: { count: 1_000 }

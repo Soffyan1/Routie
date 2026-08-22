@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { DateTime } from "luxon";
-import { buildMonthlySlots, calendarRequestSchema } from "@routie/domain";
+import { buildBrandContext, buildMonthlySlots, calendarRequestSchema } from "@routie/domain";
 import { brandProfiles, calendarSlots, contentCalendars, contentConcepts, createDatabase, providerCredentials, withTenant } from "@routie/db";
 import { requireSession } from "@/lib/auth";
 import { requireActiveEntitlement } from "@/lib/entitlement";
@@ -64,14 +64,7 @@ export async function POST(request: NextRequest) {
       const concepts = await tx.insert(contentConcepts).values(insertedSlots.map((slot) => ({ workspaceId: session.workspaceId, slotId: slot.id }))).returning({ id: contentConcepts.id });
       return { calendar: created!, conceptIds: concepts.map(({ id }) => id), credential, profile };
     });
-    const promptContext = [
-      `Brand: ${createdBatch.profile.businessName}`,
-      `Brief: ${createdBatch.profile.brief}`,
-      `Audience: ${createdBatch.profile.targetAudience}`,
-      `Tone: ${createdBatch.profile.tone}`,
-      `Pillar: ${createdBatch.profile.contentPillars.map((pillar) => `${pillar.name} ${pillar.percentage}%`).join(", ")}`,
-      `Larangan klaim: ${createdBatch.profile.prohibitedClaims.join("; ") || "tidak ada"}`
-    ].join("\n");
+    const promptContext = buildBrandContext(createdBatch.profile);
     const queue = generationQueue();
     const batches = Array.from({ length: Math.ceil(createdBatch.conceptIds.length / 10) }, (_, index) => createdBatch.conceptIds.slice(index * 10, index * 10 + 10));
     await Promise.all(batches.map((conceptIds, batchIndex) => queue.add("calendar-ideas", {
@@ -90,7 +83,7 @@ export async function POST(request: NextRequest) {
         idempotencyKey: `${createdBatch.calendar.id}:ideas:v2:${batchIndex}`
       },
       target: { kind: "CALENDAR_IDEAS", calendarId: createdBatch.calendar.id, conceptIds }
-    }, { jobId: `${createdBatch.calendar.id}-ideas-${batchIndex}`, attempts: 5, delay: batchIndex * 3_000, backoff: { type: "exponential", delay: 4_000 } })));
+    }, { jobId: `${createdBatch.calendar.id}-ideas-${batchIndex}`, attempts: 2, delay: batchIndex * 5_000, backoff: { type: "exponential", delay: 15_000 } })));
     return NextResponse.json({ calendar: createdBatch.calendar, slotsCreated: slots.length, generationQueued: true, generationJobsQueued: batches.length }, { status: 201 });
   } catch (error) {
     return apiError(error);

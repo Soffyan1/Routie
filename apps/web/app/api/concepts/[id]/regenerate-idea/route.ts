@@ -14,6 +14,7 @@ import { requireActiveEntitlement } from "@/lib/entitlement";
 import { serverEnv } from "@/lib/env";
 import { apiError } from "@/lib/http";
 import { generationQueue } from "@/lib/queue";
+import { buildBrandContext } from "@routie/domain";
 
 export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
@@ -32,6 +33,9 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
         .limit(1);
 
       if (!concept) throw new Error("Konsep konten tidak ditemukan");
+      if (concept.state === "IDEA_DRAFT" && concept.topic === "Menyusun ide konten..." && !concept.heldReason) {
+        throw new Error("Routie masih menyusun ide ini. Tunggu proses aktif selesai sebelum mencoba kembali.");
+      }
 
       const profile = await tx.query.brandProfiles.findFirst({
         where: (table, { eq }) => eq(table.workspaceId, session.workspaceId)
@@ -57,32 +61,36 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
         throw new Error("Hubungkan Google AI Studio API key di Pengaturan terlebih dahulu.");
       }
 
-      await tx
+      const nextVersion = concept.version + 1;
+      const [updated] = await tx
         .update(contentConcepts)
         .set({
           state: "IDEA_DRAFT",
           topic: "Menyusun ide konten...",
           heldReason: null,
+          version: nextVersion,
           updatedAt: new Date()
         })
-        .where(eq(contentConcepts.id, id));
+        .where(
+          and(
+            eq(contentConcepts.id, id),
+            eq(contentConcepts.workspaceId, session.workspaceId),
+            eq(contentConcepts.version, concept.version)
+          )
+        )
+        .returning({ version: contentConcepts.version });
+      if (!updated) throw new Error("Ide ini baru saja diproses oleh permintaan lain. Muat ulang kalender.");
 
       return {
         concept,
+        version: updated.version,
         calendarId: calendar?.id || "manual-calendar",
         credential,
         profile
       };
     });
 
-    const promptContext = [
-      `Brand: ${result.profile.businessName}`,
-      `Brief: ${result.profile.brief}`,
-      `Audience: ${result.profile.targetAudience}`,
-      `Tone: ${result.profile.tone}`,
-      `Pillar: ${result.profile.contentPillars.map((p) => `${p.name} ${p.percentage}%`).join(", ")}`,
-      `Larangan klaim: ${result.profile.prohibitedClaims.join("; ") || "tidak ada"}`
-    ].join("\n");
+    const promptContext = buildBrandContext(result.profile);
 
     const queue = generationQueue();
     await queue.add(
@@ -99,7 +107,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
             promptContext,
             "Kembalikan JSON array saja berisi tepat 1 item dengan property topic, hook, outline, initialCaption, hashtags (array 3-7 hashtag string), contentPillar, dan recommendedKind (TEXT|IMAGE|CAROUSEL|SHORT_VIDEO|STORY). Jangan gunakan markdown fence."
           ].join("\n"),
-          idempotencyKey: `regen-idea:${id}:${Date.now()}`
+          idempotencyKey: `regen-idea:${id}:v${result.version}`
         },
         target: {
           kind: "CALENDAR_IDEAS",
@@ -108,9 +116,9 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
         }
       },
       {
-        jobId: `regen-idea-${id}-${Date.now()}`,
-        attempts: 5,
-        backoff: { type: "exponential", delay: 3_000 }
+        jobId: `regen-idea-${id}-v${result.version}`,
+        attempts: 2,
+        backoff: { type: "exponential", delay: 15_000 }
       }
     );
 

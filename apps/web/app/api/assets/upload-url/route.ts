@@ -9,8 +9,8 @@ import { requireActiveEntitlement } from "@/lib/entitlement";
 import { apiError } from "@/lib/http";
 
 const inputSchema = z.object({
-  filename: z.string().min(1).max(255).regex(/^[a-zA-Z0-9._ -]+$/),
-  contentType: z.enum(["image/png", "image/jpeg", "application/pdf", "audio/mpeg", "video/mp4", "font/woff2"]),
+  filename: z.string().min(1).max(255),
+  contentType: z.string().min(1),
   sizeBytes: z.number().int().positive().max(500 * 1024 * 1024)
 });
 
@@ -26,7 +26,10 @@ export async function POST(request: NextRequest) {
       columns: { storageUsedBytes: true, maxStorageBytes: true }
     }));
     if (!workspace || workspace.storageUsedBytes + input.sizeBytes > workspace.maxStorageBytes) throw new Error("Workspace storage quota exceeded");
-    const safeName = input.filename.replace(/\s+/g, "-").toLowerCase();
+    const safeName = input.filename
+      .replace(/[^a-zA-Z0-9._-]/g, "_")
+      .replace(/_+/g, "_")
+      .toLowerCase();
     const objectKey = `${session.workspaceId}/uploads/${randomUUID()}-${safeName}`;
     const uploadUrl = await createUploadUrl(objectKey, input.contentType, input.sizeBytes);
     return NextResponse.json({ objectKey, uploadUrl, expiresInSeconds: 300 });

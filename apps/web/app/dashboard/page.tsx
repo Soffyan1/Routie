@@ -1,31 +1,20 @@
 import {
-  AlertCircle,
   ArrowRight,
   ArrowUpRight,
-  Calendar,
-  CalendarDays,
-  Check,
+  CalendarClock,
   CheckCircle2,
   ChevronRight,
-  Clock,
+  CircleAlert,
   Clock3,
-  ExternalLink,
   Eye,
   FileCheck2,
-  FileText,
-  Filter,
-  Globe,
+  Globe2,
   ImageIcon,
-  Layers,
-  MoreHorizontal,
+  Layers3,
   Play,
-  Plus,
-  Radio,
   Send,
   Sparkles,
-  TrendingUp,
-  TriangleAlert,
-  Zap
+  TrendingUp
 } from "lucide-react";
 import Link from "next/link";
 import { and, asc, eq } from "drizzle-orm";
@@ -43,7 +32,7 @@ import type { ContentState } from "@routie/domain";
 import { connection } from "next/server";
 import { AppShell } from "@/components/app-shell";
 import { CalendarBuilder } from "@/components/calendar-builder";
-import { requireSession } from "@/lib/auth";
+import { requirePageSession } from "@/lib/page-auth";
 import { serverEnv } from "@/lib/env";
 
 const stateConfig: Record<ContentState, { label: string; tone: "blue" | "green" | "amber" | "red" | "purple" | "gray" }> = {
@@ -61,11 +50,13 @@ const stateConfig: Record<ContentState, { label: string; tone: "blue" | "green" 
   FAILED: { label: "Gagal", tone: "red" }
 };
 
+const readyStates: ContentState[] = ["APPROVED", "SCHEDULED", "PUBLISHING", "PUBLISHED"];
+
 export default async function DashboardPage() {
   await connection();
-  const session = await requireSession();
+  const session = await requirePageSession();
   const db = createDatabase(serverEnv().DATABASE_URL);
-  
+
   const data = await withTenant(db, session.workspaceId, async (tx) => {
     const [identity, concepts, connections] = await Promise.all([
       tx.select({ workspaceName: workspaces.name, userName: users.name })
@@ -94,17 +85,43 @@ export default async function DashboardPage() {
     return { identity: identity[0], concepts, connections };
   });
 
+  const total = data.concepts.length;
   const waiting = data.concepts.filter((item) => item.state === "IDEA_REVIEW" || item.state === "FINAL_REVIEW").length;
   const ready = data.concepts.filter((item) => item.state === "APPROVED" || item.state === "SCHEDULED").length;
   const published = data.concepts.filter((item) => item.state === "PUBLISHED").length;
-  const attention = data.concepts.filter((item) => item.state === "HELD" || item.state === "FAILED").length + 
-    data.connections.filter((item) => item.disconnectedAt || (item.tokenExpiresAt && item.tokenExpiresAt <= new Date())).length;
-  const approved = data.concepts.filter((item) => ["IDEA_APPROVED", "APPROVED", "SCHEDULED", "PUBLISHING", "PUBLISHED"].includes(item.state)).length;
+  const attention = data.concepts.filter((item) => item.state === "HELD" || item.state === "FAILED").length
+    + data.connections.filter((item) => item.disconnectedAt || (item.tokenExpiresAt && item.tokenExpiresAt <= new Date())).length;
+  const approved = data.concepts.filter((item) => ["IDEA_APPROVED", ...readyStates].includes(item.state)).length;
   const ideaReview = data.concepts.filter((item) => item.state === "IDEA_REVIEW").length;
   const finalReview = data.concepts.filter((item) => item.state === "FINAL_REVIEW").length;
   const connectedChannels = data.connections.filter((item) => !item.disconnectedAt).length;
+  const readiness = total ? Math.round((approved / total) * 100) : 0;
 
-  const now = new Intl.DateTimeFormat("id-ID", { dateStyle: "full", timeZone: "Asia/Jakarta" }).format(new Date());
+  const now = new Date();
+  const fullDate = new Intl.DateTimeFormat("id-ID", { dateStyle: "full", timeZone: "Asia/Jakarta" }).format(now);
+  const todayIso = new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: "Asia/Jakarta"
+  }).format(now);
+  const today = new Date(`${todayIso}T00:00:00Z`);
+  const activityDays = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(today);
+    date.setUTCDate(today.getUTCDate() + index);
+    const iso = date.toISOString().slice(0, 10);
+    const concepts = data.concepts.filter((item) => item.localDate === iso);
+    return {
+      iso,
+      weekday: new Intl.DateTimeFormat("id-ID", { weekday: "short", timeZone: "UTC" }).format(date),
+      date: new Intl.DateTimeFormat("id-ID", { day: "numeric", timeZone: "UTC" }).format(date),
+      total: concepts.length,
+      ready: concepts.filter((item) => readyStates.includes(item.state)).length
+    };
+  });
+  const maxActivity = Math.max(1, ...activityDays.map((item) => item.total));
+  const firstName = data.identity?.userName?.split(" ")[0] ?? "Owner";
+  const workspaceName = data.identity?.workspaceName ?? "workspace ini";
 
   return (
     <AppShell
@@ -117,246 +134,126 @@ export default async function DashboardPage() {
         unreadCount: 0
       }}
     >
-      <div className="crm-page-container">
-        {/* Page Header */}
-        <section className="crm-page-header">
-          <div className="crm-header-info">
-            <span className="crm-header-date">{now}</span>
-            <h1 className="crm-page-title">
-              Selamat datang kembali, {data.identity?.userName?.split(" ")[0] ?? "Owner"}
-            </h1>
-            <p className="crm-page-desc">
-              Berikut adalah ringkasan produksi konten, antrean review, dan status jadwal tayang di workspace <strong>{data.identity?.workspaceName ?? "ini"}</strong>.
-            </p>
+      <div className="crm-page-container crm-dashboard-page">
+        <section className="crm-dash-hero">
+          <div className="crm-dash-hero-copy">
+            <div className="crm-dash-kicker"><span className="crm-dash-live-dot" />{fullDate}</div>
+            <h1>Selamat datang, {firstName}</h1>
+            <p>Pantau produksi, approval, dan jadwal publikasi <strong>{workspaceName}</strong> dari satu tempat.</p>
           </div>
-          <div className="crm-header-actions">
+          <div className="crm-dash-hero-action">
+            <span className="crm-dash-action-note">Rencanakan konten berikutnya</span>
             <CalendarBuilder />
           </div>
         </section>
 
-        {/* 4-Card CRM Metric Grid */}
-        <section className="crm-metrics-grid">
-          {/* Card 1: Total Concepts */}
-          <div className="crm-metric-card">
-            <div className="crm-metric-top">
-              <span className="crm-metric-label">TOTAL KONSEP BULAN INI</span>
-              <span className="crm-metric-tag blue">Aktif</span>
-            </div>
-            <div className="crm-metric-body">
-              <span className="crm-metric-number">
-                {String(data.concepts.length).padStart(2, "0")}
-              </span>
-              <div className="crm-metric-icon-wrap blue">
-                <Layers size={18} />
-              </div>
-            </div>
-            <div className="crm-metric-footer">
-              <span className="crm-trend positive">
-                <TrendingUp size={12} /> Target 100%
-              </span>
-              <span className="crm-metric-subtext">1-3 konsep per hari</span>
-            </div>
-          </div>
-
-          {/* Card 2: Pending Approval */}
-          <div className="crm-metric-card">
-            <div className="crm-metric-top">
-              <span className="crm-metric-label">MENUNGGU REVIEW</span>
-              <span className="crm-metric-tag amber">{waiting > 0 ? "Perlu Tindakan" : "Semua Beres"}</span>
-            </div>
-            <div className="crm-metric-body">
-              <span className="crm-metric-number">
-                {String(waiting).padStart(2, "0")}
-              </span>
-              <div className="crm-metric-icon-wrap amber">
-                <Clock3 size={18} />
-              </div>
-            </div>
-            <div className="crm-metric-footer">
-              <span className="crm-metric-highlight amber">
-                {finalReview} Final · {ideaReview} Ide
-              </span>
-              <span className="crm-metric-subtext">sebelum biaya render</span>
-            </div>
-          </div>
-
-          {/* Card 3: Ready to Publish */}
-          <div className="crm-metric-card">
-            <div className="crm-metric-top">
-              <span className="crm-metric-label">SIAP DIPUBLIKASI</span>
-              <span className="crm-metric-tag green">Terjadwal</span>
-            </div>
-            <div className="crm-metric-body">
-              <span className="crm-metric-number">
-                {String(ready).padStart(2, "0")}
-              </span>
-              <div className="crm-metric-icon-wrap green">
-                <Send size={18} />
-              </div>
-            </div>
-            <div className="crm-metric-footer">
-              <span className="crm-metric-highlight green">
-                {published} sudah terbit
-              </span>
-              <span className="crm-metric-subtext">otomatis sesuai slot</span>
-            </div>
-          </div>
-
-          {/* Card 4: Channel Health */}
-          <div className="crm-metric-card">
-            <div className="crm-metric-top">
-              <span className="crm-metric-label">CHANNEL TERHUBUNG</span>
-              <span className={`crm-metric-tag ${attention > 0 ? "red" : "green"}`}>
-                {attention > 0 ? `${attention} Perlu Cek` : "Semua Normal"}
-              </span>
-            </div>
-            <div className="crm-metric-body">
-              <span className="crm-metric-number">
-                {String(connectedChannels).padStart(2, "0")}
-              </span>
-              <div className={`crm-metric-icon-wrap ${attention > 0 ? "red" : "purple"}`}>
-                <Globe size={18} />
-              </div>
-            </div>
-            <div className="crm-metric-footer">
-              <span className="crm-metric-subtext">
-                {data.connections.length} total integrasi sosial
-              </span>
-            </div>
-          </div>
+        <section className="crm-dash-kpi-grid" aria-label="Ringkasan performa konten">
+          <article className="crm-dash-kpi-card tone-indigo">
+            <div className="crm-dash-kpi-head"><span className="crm-dash-kpi-icon"><Layers3 size={19} /></span><span className="crm-dash-kpi-chip"><TrendingUp size={12} /> Bulan ini</span></div>
+            <div className="crm-dash-kpi-value">{total}</div>
+            <div className="crm-dash-kpi-label">Total konsep</div>
+            <p>Ide yang masuk ke pipeline konten.</p>
+          </article>
+          <article className="crm-dash-kpi-card tone-amber">
+            <div className="crm-dash-kpi-head"><span className="crm-dash-kpi-icon"><Clock3 size={19} /></span><span className="crm-dash-kpi-chip">{waiting > 0 ? "Perlu tindakan" : "Semua beres"}</span></div>
+            <div className="crm-dash-kpi-value">{waiting}</div>
+            <div className="crm-dash-kpi-label">Menunggu review</div>
+            <p>{ideaReview} ide · {finalReview} hasil final.</p>
+          </article>
+          <article className="crm-dash-kpi-card tone-green">
+            <div className="crm-dash-kpi-head"><span className="crm-dash-kpi-icon"><Send size={19} /></span><span className="crm-dash-kpi-chip"><ArrowUpRight size={12} /> Siap jalan</span></div>
+            <div className="crm-dash-kpi-value">{ready}</div>
+            <div className="crm-dash-kpi-label">Siap dipublikasi</div>
+            <p>Konten approved dan terjadwal.</p>
+          </article>
+          <article className="crm-dash-kpi-card tone-blue">
+            <div className="crm-dash-kpi-head"><span className="crm-dash-kpi-icon"><CheckCircle2 size={19} /></span><span className="crm-dash-kpi-chip">Auto-publish</span></div>
+            <div className="crm-dash-kpi-value">{published}</div>
+            <div className="crm-dash-kpi-label">Sudah terbit</div>
+            <p>Tayang melalui channel terhubung.</p>
+          </article>
         </section>
 
-        {/* Content Pipeline CRM Table Section */}
-        <section className="crm-card crm-pipeline-section" id="content">
-          <div className="crm-card-header">
-            <div className="crm-card-title-group">
-              <h2 className="crm-card-title">Pipeline Konten Terjadwal</h2>
-              <p className="crm-card-subtitle">
-                Daftar konsep konten terdekat hasil generate AI yang siap ditinjau dan diterbitkan.
-              </p>
+        <section className="crm-dash-overview-grid">
+          <article className="crm-dash-panel crm-dash-activity-card">
+            <header className="crm-dash-panel-header">
+              <div><span className="crm-dash-eyebrow">7 HARI KE DEPAN</span><h2>Aktivitas konten</h2><p>Volume konsep yang dijadwalkan setiap hari.</p></div>
+              <Link href="/calendar" className="crm-dash-text-link">Buka kalender <ChevronRight size={15} /></Link>
+            </header>
+            <div className="crm-dash-chart-summary">
+              <div><strong>{activityDays.reduce((sum, item) => sum + item.total, 0)}</strong><span>total konten</span></div>
+              <div className="crm-dash-chart-legend"><span><i className="planned" /> Terencana</span><span><i className="ready" /> Siap tayang</span></div>
             </div>
-            <div className="crm-card-actions">
-              <Link href="/approvals" className="crm-btn crm-btn-secondary">
-                <FileCheck2 size={14} />
-                <span>Buka Antrean Review</span>
-                <ChevronRight size={14} />
-              </Link>
+            <div className="crm-dash-chart-bars">
+              {activityDays.map((item, index) => {
+                const barHeight = item.total ? Math.max(20, Math.round((item.total / maxActivity) * 100)) : 7;
+                const readyHeight = item.total ? Math.round((item.ready / item.total) * 100) : 0;
+                return (
+                  <div className="crm-dash-chart-column" key={item.iso}>
+                    <div className="crm-dash-chart-value">{item.total || "–"}</div>
+                    <div className="crm-dash-chart-track">
+                      <div className={`crm-dash-chart-bar ${index === 0 ? "today" : ""}`} style={{ height: `${barHeight}%` }}>
+                        {readyHeight > 0 && <span style={{ height: `${readyHeight}%` }} />}
+                      </div>
+                    </div>
+                    <div className="crm-dash-chart-label"><span>{item.weekday}</span><b>{item.date}</b></div>
+                  </div>
+                );
+              })}
             </div>
-          </div>
+          </article>
 
-          {/* CRM Data Table */}
+          <article className="crm-dash-panel crm-dash-readiness-card">
+            <header className="crm-dash-panel-header compact">
+              <div><span className="crm-dash-eyebrow">WORKFLOW HEALTH</span><h2>Kesiapan publikasi</h2></div>
+              <span className={`crm-dash-health-pill ${attention > 0 ? "warning" : "healthy"}`}>{attention > 0 ? `${attention} isu` : "Sehat"}</span>
+            </header>
+            <div className="crm-dash-readiness-main">
+              <div className="crm-dash-progress-ring" style={{ background: `conic-gradient(var(--crm-primary) 0 ${readiness}%, #EEF0F7 ${readiness}% 100%)` }} aria-label={`${readiness}% konten siap`}>
+                <div><strong>{readiness}%</strong><span>siap</span></div>
+              </div>
+              <div className="crm-dash-readiness-copy"><strong>{approved} dari {total}</strong><span>konten sudah melewati approval</span></div>
+            </div>
+            <div className="crm-dash-flow-list">
+              <div><span className="dot blue" /><span>Review ide</span><strong>{ideaReview}</strong></div>
+              <div><span className="dot amber" /><span>Review final</span><strong>{finalReview}</strong></div>
+              <div><span className="dot green" /><span>Approved & tayang</span><strong>{approved}</strong></div>
+            </div>
+            <Link href="/approvals" className="crm-btn crm-btn-primary crm-dash-full-button"><FileCheck2 size={15} /> Buka Approval Center</Link>
+          </article>
+        </section>
+
+        <section className="crm-dash-panel crm-dash-pipeline" id="content">
+          <header className="crm-dash-panel-header crm-dash-table-heading">
+            <div><span className="crm-dash-eyebrow">CONTENT PIPELINE</span><h2>Jadwal terdekat</h2><p>Konsep prioritas yang akan masuk ke proses review dan publikasi.</p></div>
+            <Link href="/approvals" className="crm-btn crm-btn-secondary crm-dash-review-button">Lihat semua <ArrowRight size={14} /></Link>
+          </header>
           <div className="crm-table-container">
             {data.concepts.length === 0 ? (
-              <div className="crm-empty-state">
-                <div className="crm-empty-icon">
-                  <Sparkles size={24} />
-                </div>
-                <h3>Belum ada konten di kalender</h3>
-                <p>Mulai dengan membuat kalender bulanan menggunakan AI untuk mengisi slot otomatis.</p>
-                <div style={{ marginTop: "16px" }}>
-                  <CalendarBuilder />
-                </div>
+              <div className="crm-empty-state crm-dash-empty-state">
+                <div className="crm-empty-icon"><Sparkles size={24} /></div><h3>Belum ada konten di kalender</h3><p>Buat kalender bulanan dan biarkan Routie menyiapkan pipeline pertamamu.</p>
+                <div className="crm-dash-empty-action"><CalendarBuilder /></div>
               </div>
             ) : (
-              <table className="crm-table">
-                <thead>
-                  <tr>
-                    <th style={{ width: "120px" }}>JADWAL</th>
-                    <th>TOPIK & KONSEP</th>
-                    <th style={{ width: "140px" }}>PILLAR</th>
-                    <th style={{ width: "160px" }}>CHANNELS</th>
-                    <th style={{ width: "120px" }}>FORMAT</th>
-                    <th style={{ width: "130px" }}>STATUS</th>
-                    <th style={{ width: "80px", textAlign: "right" }}>AKSI</th>
-                  </tr>
-                </thead>
+              <table className="crm-table crm-dash-table">
+                <thead><tr><th>JADWAL</th><th>TOPIK & KONSEP</th><th>PILLAR</th><th>CHANNEL</th><th>FORMAT</th><th>STATUS</th><th><span className="crm-sr-only">Aksi</span></th></tr></thead>
                 <tbody>
-                  {data.concepts.slice(0, 8).map((concept) => {
+                  {data.concepts.slice(0, 6).map((concept) => {
                     const status = stateConfig[concept.state] ?? { label: concept.state, tone: "gray" };
                     const date = new Date(`${concept.localDate}T00:00:00Z`);
-                    const formattedDate = new Intl.DateTimeFormat("id-ID", {
-                      day: "2-digit",
-                      month: "short",
-                      timeZone: "UTC"
-                    }).format(date);
-
+                    const formattedDate = new Intl.DateTimeFormat("id-ID", { day: "2-digit", month: "short", timeZone: "UTC" }).format(date);
                     return (
                       <tr key={concept.id} className="crm-table-row">
-                        {/* Jadwal */}
-                        <td>
-                          <div className="crm-date-cell">
-                            <span className="crm-date-badge">{formattedDate}</span>
-                            <span className="crm-time-text">{concept.localTime || "09:00"}</span>
-                          </div>
-                        </td>
-
-                        {/* Topik & Konsep */}
-                        <td>
-                          <div className="crm-topic-cell">
-                            <div className="crm-topic-title">
-                              {concept.topic || "AI sedang menyiapkan draf ide..."}
-                            </div>
-                          </div>
-                        </td>
-
-                        {/* Content Pillar */}
-                        <td>
-                          <span className="crm-pillar-badge">
-                            {concept.pillar || "Umum"}
-                          </span>
-                        </td>
-
-                        {/* Channels */}
-                        <td>
-                          <div className="crm-channel-tags">
-                            {concept.channels.slice(0, 3).map((ch) => (
-                              <span key={ch} className="crm-channel-tag" title={ch}>
-                                {ch.slice(0, 2).toLowerCase()}
-                              </span>
-                            ))}
-                            {concept.channels.length > 3 && (
-                              <span className="crm-channel-tag overflow">
-                                +{concept.channels.length - 3}
-                              </span>
-                            )}
-                          </div>
-                        </td>
-
-                        {/* Format */}
-                        <td>
-                          <div className="crm-format-badge">
-                            {concept.kind === "SHORT_VIDEO" ? (
-                              <>
-                                <Play size={12} className="crm-format-icon video" />
-                                <span>Video</span>
-                              </>
-                            ) : (
-                              <>
-                                <ImageIcon size={12} className="crm-format-icon image" />
-                                <span>Image</span>
-                              </>
-                            )}
-                          </div>
-                        </td>
-
-                        {/* Status */}
-                        <td>
-                          <span className={`crm-status-pill ${status.tone}`}>
-                            <span className="crm-status-dot" />
-                            {status.label}
-                          </span>
-                        </td>
-
-                        {/* Action */}
-                        <td style={{ textAlign: "right" }}>
-                          <Link
-                            href="/approvals"
-                            className="crm-row-action-btn"
-                            title="Tinjau Konsep"
-                          >
-                            <Eye size={14} />
-                          </Link>
-                        </td>
+                        <td data-label="Jadwal"><div className="crm-date-cell"><span className="crm-date-badge">{formattedDate}</span><span className="crm-time-text">{concept.localTime || "09:00"} WIB</span></div></td>
+                        <td data-label="Topik"><div className="crm-topic-cell"><div className="crm-topic-title">{concept.topic || "AI sedang menyiapkan draf ide..."}</div></div></td>
+                        <td data-label="Pillar"><span className="crm-pillar-badge">{concept.pillar || "Umum"}</span></td>
+                        <td data-label="Channel"><div className="crm-channel-tags">
+                          {concept.channels.slice(0, 3).map((channel) => <span key={channel} className="crm-channel-tag" title={channel}>{channel.slice(0, 2).toUpperCase()}</span>)}
+                          {concept.channels.length > 3 && <span className="crm-channel-tag overflow">+{concept.channels.length - 3}</span>}
+                        </div></td>
+                        <td data-label="Format"><div className="crm-format-badge">{concept.kind === "SHORT_VIDEO" ? <><Play size={12} /><span>Video</span></> : <><ImageIcon size={12} /><span>Image</span></>}</div></td>
+                        <td data-label="Status"><span className={`crm-status-pill ${status.tone}`}><span className="crm-status-dot" />{status.label}</span></td>
+                        <td data-label="Aksi"><Link href="/approvals" className="crm-row-action-btn" title="Tinjau konsep" aria-label={`Tinjau ${concept.topic || "konsep"}`}><Eye size={14} /></Link></td>
                       </tr>
                     );
                   })}
@@ -364,115 +261,37 @@ export default async function DashboardPage() {
               </table>
             )}
           </div>
-
-          {data.concepts.length > 8 && (
-            <div className="crm-table-footer">
-              <span className="crm-table-count">
-                Menampilkan 8 dari {data.concepts.length} total konsep
-              </span>
-              <Link href="/approvals" className="crm-btn crm-btn-ghost">
-                Lihat Semua Antrean <ArrowRight size={13} />
-              </Link>
-            </div>
-          )}
+          {data.concepts.length > 6 && <footer className="crm-table-footer"><span className="crm-table-count">Menampilkan 6 dari {data.concepts.length} konsep</span><Link href="/approvals" className="crm-dash-text-link">Lihat seluruh pipeline <ArrowRight size={14} /></Link></footer>}
         </section>
 
-        {/* Bottom 2-Column Section: Velocity & Channel Health */}
-        <section className="crm-bottom-grid">
-          {/* Approval Progress & Velocity */}
-          <div className="crm-card crm-approval-widget">
-            <div className="crm-card-header">
-              <div className="crm-card-title-group">
-                <h2 className="crm-card-title">Kemajuan Approval</h2>
-                <p className="crm-card-subtitle">Status verifikasi sebelum jadwal rilis</p>
-              </div>
-              <span className="crm-badge blue">{waiting} pending</span>
+        <section className="crm-dash-bottom-grid">
+          <article className="crm-dash-panel crm-dash-focus-card">
+            <header className="crm-dash-panel-header compact"><div><span className="crm-dash-eyebrow">NEXT ACTIONS</span><h2>Fokus hari ini</h2></div><CalendarClock size={19} /></header>
+            <div className="crm-dash-focus-list">
+              <Link href="/approvals"><span className="crm-dash-focus-icon amber"><Clock3 size={16} /></span><span><strong>Review yang menunggu</strong><small>Selesaikan sebelum proses render</small></span><b>{waiting}</b></Link>
+              <Link href="/calendar"><span className="crm-dash-focus-icon green"><Send size={16} /></span><span><strong>Konten siap tayang</strong><small>Approved atau sudah terjadwal</small></span><b>{ready}</b></Link>
+              <Link href="/settings/connectors"><span className={`crm-dash-focus-icon ${attention > 0 ? "red" : "blue"}`}><CircleAlert size={16} /></span><span><strong>Kesehatan workspace</strong><small>{attention > 0 ? "Ada item yang perlu diperiksa" : "Tidak ada kendala aktif"}</small></span><b>{attention}</b></Link>
             </div>
+          </article>
 
-            <div className="crm-approval-widget-body">
-              <div className="crm-progress-bar-container">
-                <div className="crm-progress-bar-header">
-                  <span>Tingkat Kesiapan Konten</span>
-                  <b>{data.concepts.length ? Math.round((approved / data.concepts.length) * 100) : 0}%</b>
-                </div>
-                <div className="crm-progress-track">
-                  <div
-                    className="crm-progress-fill"
-                    style={{
-                      width: `${data.concepts.length ? Math.round((approved / data.concepts.length) * 100) : 0}%`
-                    }}
-                  />
-                </div>
-              </div>
-
-              <div className="crm-stats-trio">
-                <div className="crm-stat-box">
-                  <span className="crm-stat-val text-green">{approved}</span>
-                  <span className="crm-stat-lbl">Disetujui</span>
-                </div>
-                <div className="crm-stat-box">
-                  <span className="crm-stat-val text-blue">{ideaReview}</span>
-                  <span className="crm-stat-lbl">Review Ide</span>
-                </div>
-                <div className="crm-stat-box">
-                  <span className="crm-stat-val text-amber">{finalReview}</span>
-                  <span className="crm-stat-lbl">Review Final</span>
-                </div>
-              </div>
-
-              <div className="crm-widget-action">
-                <Link href="/approvals" className="crm-btn crm-btn-primary full">
-                  <CheckCircle2 size={15} />
-                  <span>Buka Approval Center</span>
-                </Link>
-              </div>
-            </div>
-          </div>
-
-          {/* Social Channels Health */}
-          <div className="crm-card crm-channels-widget">
-            <div className="crm-card-header">
-              <div className="crm-card-title-group">
-                <h2 className="crm-card-title">Status Integrasi Channel</h2>
-                <p className="crm-card-subtitle">Kesiapan jalur auto-publish sosial media</p>
-              </div>
-              <Link href="/settings#connections" className="crm-btn crm-btn-ghost">
-                Kelola
-              </Link>
-            </div>
-
-            <div className="crm-channels-list">
+          <article className="crm-dash-panel crm-dash-channel-card">
+            <header className="crm-dash-panel-header compact"><div><span className="crm-dash-eyebrow">DISTRIBUTION</span><h2>Channel terhubung</h2></div><span className="crm-dash-channel-count"><Globe2 size={14} /> {connectedChannels}</span></header>
+            <div className="crm-dash-channel-list">
               {data.connections.length === 0 ? (
-                <div className="crm-empty-state-mini">
-                  <p>Belum ada akun sosial media yang terhubung.</p>
-                  <Link href="/settings#connections" className="crm-btn crm-btn-secondary">
-                    Hubungkan Sekarang
-                  </Link>
-                </div>
-              ) : (
-                data.connections.slice(0, 4).map((conn) => {
-                  const isHealthy = !conn.disconnectedAt && (!conn.tokenExpiresAt || conn.tokenExpiresAt > new Date());
-                  return (
-                    <div key={conn.id} className="crm-channel-row">
-                      <div className="crm-channel-icon-box">
-                        {conn.channel[0]}
-                      </div>
-                      <div className="crm-channel-meta">
-                        <span className="crm-channel-name">{conn.channel}</span>
-                        <span className="crm-channel-handle">{conn.accountName || "Official Account"}</span>
-                      </div>
-                      <div className="crm-channel-status">
-                        <span className={`crm-status-pill ${isHealthy ? "green" : "amber"}`}>
-                          <span className="crm-status-dot" />
-                          {isHealthy ? "Connected" : "Reconnect"}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
+                <div className="crm-dash-channel-empty"><Globe2 size={20} /><span>Belum ada channel yang terhubung.</span><Link href="/settings/connectors">Hubungkan channel</Link></div>
+              ) : data.connections.slice(0, 4).map((channel) => {
+                const healthy = !channel.disconnectedAt && (!channel.tokenExpiresAt || channel.tokenExpiresAt > new Date());
+                return (
+                  <div className="crm-dash-channel-row" key={channel.id}>
+                    <span className="crm-dash-channel-avatar">{channel.channel.slice(0, 2)}</span>
+                    <span><strong>{channel.channel}</strong><small>{channel.accountName || "Official account"}</small></span>
+                    <span className={`crm-dash-connection-state ${healthy ? "connected" : "warning"}`}><i /> {healthy ? "Connected" : "Reconnect"}</span>
+                  </div>
+                );
+              })}
             </div>
-          </div>
+            <Link href="/settings/connectors" className="crm-dash-manage-link">Kelola integrasi <ArrowRight size={14} /></Link>
+          </article>
         </section>
       </div>
     </AppShell>

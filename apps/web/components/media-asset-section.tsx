@@ -25,19 +25,53 @@ import {
   Video
 } from "lucide-react";
 
+type MediaProvider = "OPENAI" | "GEMINI" | "ZARK";
+
 type MediaAssetStatus = {
   isConfigured: boolean;
-  provider: "OPENAI" | "GEMINI" | null;
+  provider: MediaProvider | null;
   model: string | null;
   secretLastFour: string | null;
   validatedAt: string | null;
 };
 
+type ZarkPilotStatus = {
+  enabled: boolean;
+  monthlyImageLimit: number;
+  attemptsThisMonth: number;
+  remainingThisMonth: number;
+};
+
+function providerName(provider: MediaProvider | null): string {
+  if (provider === "OPENAI") return "OpenAI (GPT-Image)";
+  if (provider === "GEMINI") return "Google Gemini (Imagen)";
+  if (provider === "ZARK") return "Zark Auto";
+  return "Provider gambar AI";
+}
+
+function providerDashboard(provider: MediaProvider): { label: string; url: string } {
+  if (provider === "OPENAI") return { label: "OpenAI API Keys", url: "https://platform.openai.com/api-keys" };
+  if (provider === "GEMINI") return { label: "Google AI Studio", url: "https://aistudio.google.com/app/apikey" };
+  return { label: "Zark", url: "https://www.zarklab.ai/" };
+}
+
+function apiKeyDescription(provider: MediaProvider): string {
+  if (provider === "OPENAI") return "OpenAI (berawalan sk-...)";
+  if (provider === "GEMINI") return "Google AI (berawalan AIza...)";
+  return "Zark dari akun Pro Anda";
+}
+
 export function MediaAssetSection() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState<MediaAssetStatus | null>(null);
+  const [zarkPilot, setZarkPilot] = useState<ZarkPilotStatus>({
+    enabled: false,
+    monthlyImageLimit: 25,
+    attemptsThisMonth: 0,
+    remainingThisMonth: 25
+  });
   const [isEditing, setIsEditing] = useState(false);
-  const [provider, setProvider] = useState<"OPENAI" | "GEMINI">("OPENAI");
+  const [provider, setProvider] = useState<MediaProvider>("OPENAI");
   const [apiKey, setApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -53,8 +87,17 @@ export function MediaAssetSection() {
       setLoading(true);
       const res = await fetch("/api/provider-credentials");
       if (res.ok) {
-        const data = await res.json();
-        setStatus(data.mediaAsset || { isConfigured: false });
+        const data = (await res.json()) as { mediaAsset?: MediaAssetStatus; zarkPilot?: ZarkPilotStatus };
+        setStatus(
+          data.mediaAsset || {
+            isConfigured: false,
+            provider: null,
+            model: null,
+            secretLastFour: null,
+            validatedAt: null
+          }
+        );
+        if (data.zarkPilot) setZarkPilot(data.zarkPilot);
       }
     } catch {
       // ignore
@@ -113,7 +156,7 @@ export function MediaAssetSection() {
       if (res.ok && data.success) {
         setTestResult({
           success: true,
-          message: data.message || `Koneksi ke ${provider === "OPENAI" ? "OpenAI" : "Google AI"} berhasil!`
+          message: data.message || `Koneksi ke ${providerName(provider)} berhasil!`
         });
       } else {
         setTestResult({
@@ -174,7 +217,8 @@ export function MediaAssetSection() {
   async function handleDeleteKey() {
     setDeleting(true);
     try {
-      const res = await fetch("/api/provider-credentials?target=media", {
+      const target = status?.provider === "ZARK" ? "zark-pilot" : "media";
+      const res = await fetch(`/api/provider-credentials?target=${target}`, {
         method: "DELETE"
       });
       if (res.ok) {
@@ -211,7 +255,7 @@ export function MediaAssetSection() {
               <div>
                 <div className="crm-ai-title-row">
                   <h3 className="crm-ai-main-title">
-                    {status.provider === "OPENAI" ? "OpenAI (GPT-Image & DALL·E)" : "Google Gemini (Imagen)"}
+                    {providerName(status.provider)}
                   </h3>
                   <span className="crm-badge green">
                     <span className="crm-badge-dot green" />
@@ -219,7 +263,9 @@ export function MediaAssetSection() {
                   </span>
                 </div>
                 <p className="crm-ai-subtitle">
-                  Kunci API aktif untuk membuat gambar postingan feed, banner grafis, dan aset story otomatis.
+                  {status.provider === "ZARK"
+                    ? "Zark Pilot aktif untuk evaluasi text-to-image. Hasil yang selesai langsung disimpan ke storage Routie."
+                    : "Kunci API aktif untuk membuat gambar postingan feed, banner grafis, dan aset story otomatis."}
                 </p>
               </div>
             </div>
@@ -237,17 +283,25 @@ export function MediaAssetSection() {
             <div className="crm-ai-detail-item">
               <span className="crm-ai-detail-label">Model Gambar AI</span>
               <span className="crm-ai-detail-value">
-                {status.model || (status.provider === "OPENAI" ? "gpt-image-2" : "gemini-3.1-flash-image")}
+                {status.model || (status.provider === "OPENAI" ? "gpt-image-2" : status.provider === "ZARK" ? "auto" : "gemini-3.1-flash-image")}
               </span>
             </div>
 
             <div className="crm-ai-detail-item">
-              <span className="crm-ai-detail-label">Format Aset Didukung</span>
-              <div className="crm-ai-tags-row">
-                <span className="crm-ai-tag">Feed Post (1:1)</span>
-                <span className="crm-ai-tag">Story (9:16)</span>
-                <span className="crm-ai-tag">Landscape (16:9)</span>
-              </div>
+              <span className="crm-ai-detail-label">
+                {status.provider === "ZARK" ? "Penggunaan Pilot Bulan Ini" : "Format Aset Didukung"}
+              </span>
+              {status.provider === "ZARK" ? (
+                <span className="crm-ai-detail-value">
+                  {zarkPilot.attemptsThisMonth} dari {zarkPilot.monthlyImageLimit} percobaan · {zarkPilot.remainingThisMonth} tersisa
+                </span>
+              ) : (
+                <div className="crm-ai-tags-row">
+                  <span className="crm-ai-tag">Feed Post (1:1)</span>
+                  <span className="crm-ai-tag">Story (9:16)</span>
+                  <span className="crm-ai-tag">Landscape (16:9)</span>
+                </div>
+              )}
             </div>
 
             <div className="crm-ai-detail-item">
@@ -318,7 +372,7 @@ export function MediaAssetSection() {
               className="crm-btn crm-btn-danger"
             >
               <Trash2 size={14} />
-              <span>Hapus Kunci</span>
+              <span>{status.provider === "ZARK" ? "Hentikan Pilot" : "Hapus Kunci"}</span>
             </button>
           </div>
         </div>
@@ -330,13 +384,14 @@ export function MediaAssetSection() {
               <div className="crm-modal-header">
                 <div className="crm-modal-title-row">
                   <AlertTriangle className="crm-warn-icon" size={20} />
-                  <h3>Hapus Kunci Generasi Aset Media?</h3>
+                  <h3>{status.provider === "ZARK" ? "Hentikan Zark Pilot?" : "Hapus Kunci Generasi Aset Media?"}</h3>
                 </div>
               </div>
               <div className="crm-modal-body">
                 <p>
-                  Setelah dihapus, draf konten tidak dapat di-generate menjadi gambar visual atau
-                  video hingga Anda menghubungkan kembali kunci API gambar.
+                  {status.provider === "ZARK"
+                    ? "Kunci Zark akan dihapus dan provider gambar yang Anda gunakan sebelumnya akan diaktifkan kembali secara otomatis. Semua gambar yang sudah tersimpan di Routie tetap aman."
+                    : "Setelah dihapus, draf konten tidak dapat di-generate menjadi gambar visual atau video hingga Anda menghubungkan kembali kunci API gambar."}
                 </p>
               </div>
               <div className="crm-modal-footer">
@@ -355,7 +410,9 @@ export function MediaAssetSection() {
                   className="crm-btn crm-btn-danger"
                 >
                   {deleting ? <Loader2 className="spin" size={14} /> : <Trash2 size={14} />}
-                  <span>{deleting ? "Menghapus..." : "Ya, Hapus Kunci"}</span>
+                  <span>
+                    {deleting ? "Memproses..." : status.provider === "ZARK" ? "Ya, Hentikan Pilot" : "Ya, Hapus Kunci"}
+                  </span>
                 </button>
               </div>
             </div>
@@ -459,17 +516,55 @@ export function MediaAssetSection() {
                   </span>
                 </div>
               </label>
+
+              {zarkPilot.enabled && (
+                <label
+                  className={`crm-media-provider-card ${provider === "ZARK" ? "selected" : ""}`}
+                  onClick={() => setProvider("ZARK")}
+                >
+                  <input
+                    type="radio"
+                    name="mediaProvider"
+                    value="ZARK"
+                    checked={provider === "ZARK"}
+                    onChange={() => setProvider("ZARK")}
+                  />
+                  <div className="crm-media-provider-body">
+                    <div className="crm-media-provider-title-row">
+                      <b>Zark Auto</b>
+                      <span className="crm-badge blue" style={{ fontSize: "10px", padding: "1px 6px" }}>
+                        Pilot Development
+                      </span>
+                    </div>
+                    <span className="crm-media-provider-desc">
+                      Uji banyak model gambar lewat satu akun Zark. Image-only, 1 output per request, dan dapat dimatikan kapan saja.
+                    </span>
+                  </div>
+                </label>
+              )}
             </div>
+
+            {provider === "ZARK" && (
+              <div className="crm-zark-pilot-note">
+                <Sparkles size={15} />
+                <div>
+                  <b>Zark Pilot aman untuk eksperimen</b>
+                  <span>
+                    Maksimal {zarkPilot.monthlyImageLimit} percobaan per workspace per bulan. Setiap generation tetap memakai kredit akun Zark Anda.
+                  </span>
+                </div>
+              </div>
+            )}
 
             <div style={{ marginTop: "10px" }}>
               <a
-                href={provider === "OPENAI" ? "https://platform.openai.com/api-keys" : "https://aistudio.google.com/app/apikey"}
+                href={providerDashboard(provider).url}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="crm-btn crm-btn-secondary crm-ai-external-btn"
                 style={{ fontSize: "12px" }}
               >
-                <span>Buka Dashboard {provider === "OPENAI" ? "OpenAI API Keys" : "Google AI Studio"}</span>
+                <span>Buka Dashboard {providerDashboard(provider).label}</span>
                 <ExternalLink size={13} />
               </a>
             </div>
@@ -482,7 +577,7 @@ export function MediaAssetSection() {
           <div className="crm-ai-step-content">
             <h4 className="crm-ai-step-title">Tempelkan Kunci API</h4>
             <p className="crm-ai-step-instruction">
-              Masukkan kunci API {provider === "OPENAI" ? "OpenAI (berawalan sk-...)" : "Google AI (berawalan AIza...)"} ke kolom di bawah ini:
+              Masukkan kunci API {apiKeyDescription(provider)} ke kolom di bawah ini:
             </p>
 
             <div className="crm-ai-input-wrapper">
@@ -495,7 +590,13 @@ export function MediaAssetSection() {
                   setTestResult(null);
                   setSaveError(null);
                 }}
-                placeholder={provider === "OPENAI" ? "Contoh: sk-proj-1234567890abcdef..." : "Contoh: AIzaSyA1b2c3d4e5..."}
+                placeholder={
+                  provider === "OPENAI"
+                    ? "Contoh: sk-proj-1234567890abcdef..."
+                    : provider === "GEMINI"
+                      ? "Contoh: AIzaSyA1b2c3d4e5..."
+                      : "Tempel API key Zark Anda..."
+                }
                 className="crm-input crm-ai-input"
                 autoComplete="off"
                 spellCheck="false"

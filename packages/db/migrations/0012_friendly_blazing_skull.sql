@@ -1,0 +1,3 @@
+DROP INDEX "provider_credentials_workspace_capability_unique";--> statement-breakpoint
+CREATE UNIQUE INDEX "provider_credentials_workspace_provider_capability_unique" ON "provider_credentials" USING btree ("workspace_id","provider","capability");--> statement-breakpoint
+CREATE UNIQUE INDEX "provider_credentials_workspace_active_capability_unique" ON "provider_credentials" USING btree ("workspace_id","capability") WHERE "provider_credentials"."disabled_at" is null;

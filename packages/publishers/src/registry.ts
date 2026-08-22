@@ -10,7 +10,7 @@ export function getSocialPublisher(channel: SocialChannel, env: NodeJS.ProcessEn
   if (channel === "X") return new ExportPublisher(channel, flags);
   if ((channel === "FACEBOOK" || channel === "INSTAGRAM") && flags.meta) return new MetaPublisher(channel, flags);
   if (channel === "THREADS" && flags.threads) return new MetaPublisher(channel, flags);
-  if (channel === "TIKTOK" && flags.tiktok) return new TikTokPublisher(flags);
+  if (channel === "TIKTOK" && (flags.tiktok || flags.tiktokDraft)) return new TikTokPublisher(flags);
   if (channel === "YOUTUBE" && flags.youtube) return new YouTubePublisher(flags);
   return new ExportPublisher(channel, flags);
 }

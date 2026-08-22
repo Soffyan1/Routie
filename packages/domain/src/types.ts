@@ -4,6 +4,7 @@ export const workspaceRoles = ["OWNER", "EDITOR", "APPROVER"] as const;
 export const providerCapabilities = ["TEXT", "WEB_SEARCH", "IMAGE", "VIDEO", "TTS"] as const;
 export const socialChannels = ["FACEBOOK", "INSTAGRAM", "TIKTOK", "THREADS", "YOUTUBE", "X"] as const;
 export const deliveryModes = ["AUTO_PUBLISH", "PLATFORM_DRAFT", "EXPORT_MANUAL"] as const;
+export const publicationModes = ["SAFE", "AUTOMATIC"] as const;
 export const entitlementStatuses = ["ACTIVE", "GRACE", "BLOCKED", "PURGE_PENDING"] as const;
 export const contentStates = [
   "IDEA_DRAFT",
@@ -24,6 +25,7 @@ export type WorkspaceRole = (typeof workspaceRoles)[number];
 export type ProviderCapability = (typeof providerCapabilities)[number];
 export type SocialChannel = (typeof socialChannels)[number];
 export type DeliveryMode = (typeof deliveryModes)[number];
+export type PublicationMode = (typeof publicationModes)[number];
 export type EntitlementStatus = (typeof entitlementStatuses)[number];
 export type ContentState = (typeof contentStates)[number];
 
@@ -31,6 +33,7 @@ export const workspaceRoleSchema = z.enum(workspaceRoles);
 export const providerCapabilitySchema = z.enum(providerCapabilities);
 export const socialChannelSchema = z.enum(socialChannels);
 export const deliveryModeSchema = z.enum(deliveryModes);
+export const publicationModeSchema = z.enum(publicationModes);
 export const entitlementStatusSchema = z.enum(entitlementStatuses);
 export const contentStateSchema = z.enum(contentStates);
 
@@ -73,6 +76,7 @@ export interface NormalizedError {
 export interface UsageRecord {
   inputTokens?: number;
   outputTokens?: number;
+  credits?: number;
   images?: number;
   audioSeconds?: number;
   videoSeconds?: number;

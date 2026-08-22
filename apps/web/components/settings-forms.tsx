@@ -308,7 +308,7 @@ export function AIIntegrationSection() {
 // Backward compatibility export
 export const ProviderForm = AIIntegrationSection;
 
-export function InviteForm() {
+export function InviteForm({ onSuccess }: { onSuccess?: () => void | Promise<void> } = {}) {
   const [status, setStatus] = useState<string>("");
   const [isSuccess, setIsSuccess] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
@@ -330,6 +330,7 @@ export function InviteForm() {
         setIsSuccess(true);
         setStatus("Undangan berhasil dikirim ke email tujuan.");
         form.reset();
+        await onSuccess?.();
       } else {
         setIsSuccess(false);
         setStatus(body.message ?? "Gagal mengirim undangan.");

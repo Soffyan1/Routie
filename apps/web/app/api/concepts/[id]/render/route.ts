@@ -30,7 +30,14 @@ export async function POST(_request: NextRequest, context: { params: Promise<{ i
         .where(and(eq(contentConcepts.id, id), eq(contentConcepts.workspaceId, session.workspaceId)))
         .limit(1);
       if (!row) throw new Error("Content concept not found");
-      if (!["IDEA_APPROVED", "FAILED"].includes(row.concept.state)) throw new Error(`Media cannot be generated from state ${row.concept.state}`);
+      if (!["IDEA_APPROVED", "FAILED", "HELD"].includes(row.concept.state)) {
+        throw new Error(`Media cannot be generated from state ${row.concept.state}`);
+      }
+      const hasCompletedIdea =
+        row.concept.topic !== "Menyusun ide konten..." &&
+        row.concept.topic !== "Ide belum berhasil dibuat" &&
+        Boolean(row.concept.hook || row.concept.initialCaption);
+      if (!hasCompletedIdea) throw new Error("Selesaikan ide dan caption sebelum membuat visual AI.");
       const [credential] = await tx
         .select()
         .from(providerCredentials)
@@ -42,6 +49,7 @@ export async function POST(_request: NextRequest, context: { params: Promise<{ i
         .limit(1);
       if (!credential) throw new Error("Configure and validate an IMAGE provider in Settings first");
       const prompt = buildImagePrompt({
+        ...row.profile,
         businessName: row.profile.businessName,
         brief: row.profile.brief,
         targetAudience: row.profile.targetAudience,
@@ -53,18 +61,32 @@ export async function POST(_request: NextRequest, context: { params: Promise<{ i
         outline: row.concept.outline,
         contentPillar: row.concept.contentPillar
       });
+      const nextVersion = row.concept.version + 1;
+      const [updated] = await tx
+        .update(contentConcepts)
+        .set({ state: "GENERATING", version: nextVersion, heldReason: null, updatedAt: new Date() })
+        .where(
+          and(
+            eq(contentConcepts.id, id),
+            eq(contentConcepts.workspaceId, session.workspaceId),
+            eq(contentConcepts.version, row.concept.version)
+          )
+        )
+        .returning({ version: contentConcepts.version });
+      if (!updated) throw new Error("Visual konten ini baru saja diproses oleh permintaan lain. Muat ulang kalender.");
+
       await tx.insert(auditEvents).values({
         workspaceId: session.workspaceId,
         actorId: session.sub,
         action: "CONTENT_MEDIA_QUEUED",
         entityType: "content_concept",
         entityId: id,
-        after: { provider: credential.provider, model: credential.model, version: row.concept.version }
+        after: { provider: credential.provider, model: credential.model, version: updated.version, state: "GENERATING" }
       });
-      return { credential, concept: row.concept, prompt };
+      return { credential, concept: row.concept, prompt, version: updated.version };
     });
 
-    const jobId = `media-${id}-v${render.concept.version}${render.concept.state === "FAILED" ? `-retry-${Date.now()}` : ""}`;
+    const jobId = `media-${id}-v${render.version}`;
     await generationQueue().add("generate-concept-media", {
       workspaceId: session.workspaceId,
       credentialId: render.credential.id,
@@ -73,10 +95,10 @@ export async function POST(_request: NextRequest, context: { params: Promise<{ i
         model: render.credential.model,
         prompt: render.prompt,
         aspectRatio: "1:1",
-        idempotencyKey: `concept-media:${id}:v${render.concept.version}`
+        idempotencyKey: `concept-media:${id}:v${render.version}`
       },
       target: { kind: "CONCEPT_MEDIA", conceptId: id }
-    }, { jobId, attempts: 3, backoff: { type: "exponential", delay: 5_000 } });
+    }, { jobId, attempts: 2, backoff: { type: "exponential", delay: 15_000 } });
     return NextResponse.json({ queued: true, state: "GENERATING", jobId });
   } catch (error) {
     return apiError(error);

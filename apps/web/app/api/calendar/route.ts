@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import {
   calendarSlots,
+  brandAssets,
   channelVariants,
   contentCalendars,
   contentConcepts,
@@ -28,6 +29,9 @@ export interface CalendarConceptItem {
   recommendedKind: string;
   state: string;
   creationMode: string;
+  generationMode: string;
+  visualPrompt: string;
+  referenceAssets: Array<{ id: string; filename: string; mimeType: string; url: string | null }>;
   heldReason: string | null;
   version: number;
   localDate: string;
@@ -43,6 +47,7 @@ export interface CalendarConceptItem {
     objectKey: string;
     mimeType: string;
     url: string | null;
+    archivedAt: string | null;
     width?: number | null;
     height?: number | null;
   } | null;
@@ -102,6 +107,11 @@ export async function GET(request: NextRequest) {
       }
 
       const conceptIds = rows.map((r) => r.concept.id);
+      const referenceIds = Array.from(new Set(rows.flatMap((row) => row.concept.referenceAssetIds || [])));
+      const references = referenceIds.length
+        ? await tx.select().from(brandAssets).where(and(eq(brandAssets.workspaceId, session.workspaceId), inArray(brandAssets.id, referenceIds)))
+        : [];
+      const referenceMap = new Map(references.map((asset) => [asset.id, asset]));
 
       // 2. Fetch variants and associated media assets
       const variants = await tx
@@ -119,16 +129,18 @@ export async function GET(request: NextRequest) {
         );
 
       // Map media per concept
-      const mediaMap = new Map<string, { id: string; kind: string; objectKey: string; mimeType: string; width: number | null; height: number | null }>();
+      const mediaMap = new Map<string, { id: string; kind: string; objectKey: string; mimeType: string; width: number | null; height: number | null; archivedAt: Date | null }>();
       for (const v of variants) {
-        if (v.media && !mediaMap.has(v.variant.conceptId)) {
+        const current = mediaMap.get(v.variant.conceptId);
+        if (v.media && (!current || (current.archivedAt && !v.media.archivedAt))) {
           mediaMap.set(v.variant.conceptId, {
             id: v.media.id,
             kind: v.media.kind,
             objectKey: v.media.objectKey,
             mimeType: v.media.mimeType,
             width: v.media.width,
-            height: v.media.height
+            height: v.media.height,
+            archivedAt: v.media.archivedAt
           });
         }
       }
@@ -138,13 +150,20 @@ export async function GET(request: NextRequest) {
       for (const row of rows) {
         const rawMedia = mediaMap.get(row.concept.id);
         let mediaUrl: string | null = null;
-        if (rawMedia?.objectKey) {
+        if (rawMedia?.objectKey && !rawMedia.archivedAt) {
           try {
             mediaUrl = await createDownloadUrl(rawMedia.objectKey, 3600);
           } catch {
             mediaUrl = null;
           }
         }
+        const referenceAssets = await Promise.all((row.concept.referenceAssetIds || []).map(async (id) => {
+          const asset = referenceMap.get(id);
+          if (!asset) return null;
+          let url: string | null = null;
+          try { url = await createDownloadUrl(asset.objectKey, 3600); } catch { url = null; }
+          return { id: asset.id, filename: typeof asset.metadata.filename === "string" ? asset.metadata.filename : "referensi-visual", mimeType: asset.mimeType, url };
+        }));
 
         formatted.push({
           id: row.concept.id,
@@ -157,6 +176,9 @@ export async function GET(request: NextRequest) {
           recommendedKind: row.concept.recommendedKind || "IMAGE",
           state: row.concept.state,
           creationMode: row.concept.creationMode || "AI",
+          generationMode: row.concept.generationMode || "AUTOMATIC",
+          visualPrompt: row.concept.visualPrompt || "",
+          referenceAssets: referenceAssets.filter((asset): asset is NonNullable<typeof asset> => Boolean(asset)),
           heldReason: row.concept.heldReason,
           version: row.concept.version,
           localDate: row.slot.localDate,
@@ -173,6 +195,7 @@ export async function GET(request: NextRequest) {
                 objectKey: rawMedia.objectKey,
                 mimeType: rawMedia.mimeType,
                 url: mediaUrl,
+                archivedAt: rawMedia.archivedAt?.toISOString() ?? null,
                 width: rawMedia.width,
                 height: rawMedia.height
               }

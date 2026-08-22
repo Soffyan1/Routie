@@ -10,12 +10,12 @@ import {
 } from "@routie/db";
 import { AppShell } from "@/components/app-shell";
 import { ApprovalCenter, type ApprovalConcept } from "@/components/approval-center";
-import { requireSession } from "@/lib/auth";
+import { requirePageSession } from "@/lib/page-auth";
 import { serverEnv } from "@/lib/env";
 
 export default async function ApprovalsPage() {
   await connection();
-  const session = await requireSession();
+  const session = await requirePageSession();
   const db = createDatabase(serverEnv().DATABASE_URL);
   
   const concepts = await withTenant(db, session.workspaceId, async (tx) => {
@@ -63,20 +63,20 @@ export default async function ApprovalsPage() {
 
   return (
     <AppShell active="Approvals">
-      <div className="crm-page-container">
+      <div className="crm-page-container crm-approvals-page">
         {/* Page Header */}
-        <section className="crm-page-header">
+        <section className="crm-page-header crm-approvals-header">
           <div className="crm-header-info">
-            <span className="crm-header-date">WORKFLOW APPROVAL</span>
+            <span className="crm-header-date">CONTENT GOVERNANCE</span>
             <h1 className="crm-page-title">Approval Center</h1>
             <p className="crm-page-desc">
               Tinjau draf ide, periksa kesesuaian brand, dan setujui sebelum media diproses worker.
             </p>
           </div>
-          <div className="crm-header-actions">
-            <span className="crm-badge blue large">
-              <b>{waiting}</b> konten menunggu keputusan
-            </span>
+          <div className="crm-approvals-headline-stat">
+            <span className="crm-approvals-stat-label"><i /> Menunggu persetujuan</span>
+            <strong>{waiting}</strong>
+            <span className="crm-approvals-stat-caption">konten aktif di antrian</span>
           </div>
         </section>
 

@@ -12,7 +12,6 @@ export function createRedisConnection(url = process.env.REDIS_URL ?? "redis://lo
 }
 
 const defaultJobOptions: JobsOptions = {
-  attempts: 3,
   backoff: { type: "exponential", delay: 5_000 },
   removeOnComplete: { age: 86_400, count: 1_000 },
   removeOnFail: { age: 7 * 86_400, count: 5_000 }
@@ -20,8 +19,11 @@ const defaultJobOptions: JobsOptions = {
 
 export function createQueues(connection = createRedisConnection()) {
   return {
-    generation: new Queue(QUEUES.generation, { connection, defaultJobOptions }),
-    publishing: new Queue(QUEUES.publishing, { connection, defaultJobOptions }),
+    generation: new Queue(QUEUES.generation, {
+      connection,
+      defaultJobOptions: { ...defaultJobOptions, attempts: 2, backoff: { type: "exponential", delay: 15_000 } }
+    }),
+    publishing: new Queue(QUEUES.publishing, { connection, defaultJobOptions: { ...defaultJobOptions, attempts: 3 } }),
     maintenance: new Queue(QUEUES.maintenance, { connection, defaultJobOptions: { ...defaultJobOptions, attempts: 1 } })
   };
 }

@@ -5,17 +5,10 @@ import {
   AlertCircle,
   Check,
   CheckCircle2,
-  Clock,
   Copy,
-  Database,
   Globe2,
-  HardDrive,
-  Layers,
   Loader2,
-  Lock,
-  Save,
-  ShieldCheck,
-  Sparkles
+  Save
 } from "lucide-react";
 
 interface WorkspaceData {
@@ -25,8 +18,7 @@ interface WorkspaceData {
   language: string;
   maxConceptsPerDay: number;
   maxMembers: number;
-  maxStorageBytes: number;
-  storageUsedBytes: number;
+  publicationMode: "SAFE" | "AUTOMATIC";
 }
 
 const TIMEZONES = [
@@ -48,6 +40,7 @@ export default function WorkspacePreferencesPage() {
   const [timezone, setTimezone] = useState("Asia/Jakarta");
   const [language, setLanguage] = useState("id-ID");
   const [maxConcepts, setMaxConcepts] = useState(3);
+  const [publicationMode, setPublicationMode] = useState<"SAFE" | "AUTOMATIC">("SAFE");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
@@ -66,6 +59,7 @@ export default function WorkspacePreferencesPage() {
             setTimezone(data.workspace.timezone || "Asia/Jakarta");
             setLanguage(data.workspace.language || "id-ID");
             setMaxConcepts(data.workspace.maxConceptsPerDay || 3);
+            setPublicationMode(data.workspace.publicationMode === "AUTOMATIC" ? "AUTOMATIC" : "SAFE");
           }
         }
       } catch {
@@ -89,7 +83,8 @@ export default function WorkspacePreferencesPage() {
           name,
           timezone,
           language,
-          maxConceptsPerDay: maxConcepts
+          maxConceptsPerDay: maxConcepts,
+          publicationMode
         })
       });
       if (res.ok) {
@@ -111,10 +106,6 @@ export default function WorkspacePreferencesPage() {
     setCopiedId(true);
     setTimeout(() => setCopiedId(false), 2000);
   }
-
-  const storageUsedGB = workspace ? ((workspace.storageUsedBytes || 0) / 1024 ** 3).toFixed(2) : "0.00";
-  const storageMaxGB = workspace ? ((workspace.maxStorageBytes || 20 * 1024 ** 3) / 1024 ** 3).toFixed(0) : "20";
-  const storagePercent = workspace && workspace.maxStorageBytes ? Math.min(100, Math.round(((workspace.storageUsedBytes || 0) / workspace.maxStorageBytes) * 100)) : 0;
 
   return (
     <div className="crm-settings-vertical-stack">
@@ -229,6 +220,39 @@ export default function WorkspacePreferencesPage() {
                 </div>
                 <span className="crm-input-hint">Rekomendasi terbaik untuk konsistensi posting harian adalah 1 - 3 konten per hari.</span>
               </div>
+
+              <div className="crm-form-group">
+                <label className="crm-label">Cara Routie Menerbitkan Konten</label>
+                <div className="crm-form-grid-2">
+                  <label className={`crm-settings-choice-card ${publicationMode === "SAFE" ? "selected" : ""}`}>
+                    <input
+                      type="radio"
+                      name="publication-mode"
+                      value="SAFE"
+                      checked={publicationMode === "SAFE"}
+                      onChange={() => setPublicationMode("SAFE")}
+                    />
+                    <span>
+                      <b>Mode Aman</b>
+                      <small>Routie menyiapkan konten, lalu Anda meninjau dan menyetujuinya sebelum tayang.</small>
+                    </span>
+                  </label>
+                  <label className={`crm-settings-choice-card ${publicationMode === "AUTOMATIC" ? "selected" : ""}`}>
+                    <input
+                      type="radio"
+                      name="publication-mode"
+                      value="AUTOMATIC"
+                      checked={publicationMode === "AUTOMATIC"}
+                      onChange={() => setPublicationMode("AUTOMATIC")}
+                    />
+                    <span>
+                      <b>Mode Otomatis</b>
+                      <small>Routie membuat, menjadwalkan, dan menerbitkan konten. Anda hanya menangani kendala penting.</small>
+                    </span>
+                  </label>
+                </div>
+                <span className="crm-input-hint">Anda dapat mengganti mode kapan pun. Konten yang sudah sedang diproses tidak diubah secara paksa.</span>
+              </div>
             </div>
 
             {/* Form Actions */}
@@ -244,44 +268,6 @@ export default function WorkspacePreferencesPage() {
             </div>
           </form>
         )}
-      </div>
-
-      {/* Storage & Entitlement Meter */}
-      <div className="crm-settings-card">
-        <div className="crm-settings-card-header">
-          <div className="crm-settings-title-group">
-            <div className="crm-settings-icon-badge purple">
-              <HardDrive size={18} />
-            </div>
-            <div>
-              <h2 className="crm-settings-title">Kapasitas Penyimpanan Cloud Media</h2>
-              <p className="crm-settings-subtitle">
-                Alokasi kapasitas penyimpanan file gambar, video, dan thumbnail aset konten di workspace Anda.
-              </p>
-            </div>
-          </div>
-          <span className="crm-badge green">
-            <ShieldCheck size={12} /> Cloud S3 Storage
-          </span>
-        </div>
-
-        <div className="crm-settings-card-content">
-          <div className="crm-storage-meter-box">
-            <div className="crm-storage-meter-header">
-              <span>Penggunaan Ruang Media</span>
-              <b>{storageUsedGB} GB dari {storageMaxGB} GB ({storagePercent}%)</b>
-            </div>
-            <div className="crm-progress-track">
-              <div
-                className="crm-progress-fill"
-                style={{ width: `${storagePercent}%` }}
-              />
-            </div>
-            <span className="crm-input-hint" style={{ marginTop: "8px", display: "block" }}>
-              Aset visual yang sudah terbit di sosial media tetap disimpan dengan aman di cloud storage workspace Anda.
-            </span>
-          </div>
-        </div>
       </div>
     </div>
   );

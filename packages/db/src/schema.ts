@@ -20,6 +20,7 @@ import {
   entitlementStatuses,
   providerCapabilities,
   socialChannels,
+  publicationModes,
   workspaceRoles,
   type ResearchSource
 } from "@routie/domain";
@@ -28,9 +29,10 @@ export const workspaceRoleEnum = pgEnum("workspace_role", workspaceRoles);
 export const providerCapabilityEnum = pgEnum("provider_capability", providerCapabilities);
 export const socialChannelEnum = pgEnum("social_channel", socialChannels);
 export const deliveryModeEnum = pgEnum("delivery_mode", deliveryModes);
+export const publicationModeEnum = pgEnum("publication_mode", publicationModes);
 export const entitlementStatusEnum = pgEnum("entitlement_status", entitlementStatuses);
 export const contentStateEnum = pgEnum("content_state", contentStates);
-export const providerEnum = pgEnum("ai_provider", ["OPENAI", "GEMINI", "ANTHROPIC"]);
+export const providerEnum = pgEnum("ai_provider", ["OPENAI", "GEMINI", "ANTHROPIC", "ZARK"]);
 export const contentKindEnum = pgEnum("content_kind", ["TEXT", "IMAGE", "CAROUSEL", "SHORT_VIDEO", "STORY"]);
 export const mediaKindEnum = pgEnum("media_kind", ["IMAGE", "VIDEO", "AUDIO", "DOCUMENT", "LOGO", "FONT"]);
 export const jobStatusEnum = pgEnum("job_status", ["QUEUED", "PROCESSING", "SUCCEEDED", "FAILED", "HELD", "CANCELED"]);
@@ -68,6 +70,7 @@ export const workspaces = pgTable(
     name: text("name").notNull(),
     timezone: text("timezone").notNull().default("Asia/Jakarta"),
     language: text("language").notNull().default("id-ID"),
+    publicationMode: publicationModeEnum("publication_mode").notNull().default("SAFE"),
     maxConceptsPerDay: integer("max_concepts_per_day").notNull().default(3),
     maxMembers: integer("max_members").notNull().default(5),
     maxStorageBytes: bigint("max_storage_bytes", { mode: "number" }).notNull().default(20 * 1024 ** 3),
@@ -159,6 +162,41 @@ export const brandAssets = pgTable(
   (table) => [index("brand_assets_workspace_idx").on(table.workspaceId), uniqueIndex("brand_assets_object_key_unique").on(table.objectKey)]
 );
 
+/** A reusable product catalogue for the Product Poster Studio. */
+export const products = pgTable(
+  "products",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    description: text("description").notNull().default(""),
+    benefits: text("benefits").array().notNull().default(sql`'{}'::text[]`),
+    priceText: text("price_text").notNull().default(""),
+    callToAction: text("call_to_action").notNull().default(""),
+    destinationUrl: text("destination_url").notNull().default(""),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    ...timestamps
+  },
+  (table) => [index("products_workspace_idx").on(table.workspaceId, table.archivedAt)]
+);
+
+export const productAssets = pgTable(
+  "product_assets",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+    productId: uuid("product_id").notNull().references(() => products.id, { onDelete: "cascade" }),
+    brandAssetId: uuid("brand_asset_id").notNull().references(() => brandAssets.id, { onDelete: "restrict" }),
+    role: text("role").notNull().default("PRODUCT_ALTERNATIVE"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    ...timestamps
+  },
+  (table) => [
+    index("product_assets_product_idx").on(table.productId, table.sortOrder),
+    uniqueIndex("product_assets_product_brand_asset_unique").on(table.productId, table.brandAssetId)
+  ]
+);
+
 export const providerCredentials = pgTable(
   "provider_credentials",
   {
@@ -174,7 +212,14 @@ export const providerCredentials = pgTable(
     ...timestamps
   },
   (table) => [
-    uniqueIndex("provider_credentials_workspace_capability_unique").on(table.workspaceId, table.capability),
+    uniqueIndex("provider_credentials_workspace_provider_capability_unique").on(
+      table.workspaceId,
+      table.provider,
+      table.capability
+    ),
+    uniqueIndex("provider_credentials_workspace_active_capability_unique")
+      .on(table.workspaceId, table.capability)
+      .where(sql`${table.disabledAt} is null`),
     index("provider_credentials_workspace_idx").on(table.workspaceId)
   ]
 );
@@ -191,6 +236,8 @@ export const socialConnections = pgTable(
     encryptedAccessToken: text("encrypted_access_token"),
     encryptedRefreshToken: text("encrypted_refresh_token"),
     tokenExpiresAt: timestamp("token_expires_at", { withTimezone: true }),
+    reauthorizationRequiredAt: timestamp("reauthorization_required_at", { withTimezone: true }),
+    reauthorizationReason: text("reauthorization_reason"),
     connectedAt: timestamp("connected_at", { withTimezone: true }).notNull().defaultNow(),
     disconnectedAt: timestamp("disconnected_at", { withTimezone: true }),
     ...timestamps
@@ -245,12 +292,64 @@ export const contentConcepts = pgTable(
     contentPillar: text("content_pillar"),
     hashtags: text("hashtags").array().notNull().default(sql`'{}'::text[]`),
     creationMode: text("creation_mode").notNull().default("AI"),
+    generationMode: text("generation_mode").notNull().default("AUTOMATIC"),
+    visualPrompt: text("visual_prompt").notNull().default(""),
+    referenceAssetIds: uuid("reference_asset_ids").array().notNull().default(sql`'{}'::uuid[]`),
     recommendedKind: contentKindEnum("recommended_kind"),
     version: integer("version").notNull().default(1),
     heldReason: text("held_reason"),
     ...timestamps
   },
   (table) => [index("content_concepts_workspace_state_idx").on(table.workspaceId, table.state)]
+);
+
+export const creativeBriefs = pgTable(
+  "creative_briefs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+    conceptId: uuid("concept_id").notNull().unique().references(() => contentConcepts.id, { onDelete: "cascade" }),
+    productId: uuid("product_id").references(() => products.id, { onDelete: "set null" }),
+    mode: text("mode").notNull(),
+    recipeCode: text("recipe_code").notNull(),
+    recipeVersion: integer("recipe_version").notNull().default(1),
+    headline: text("headline").notNull().default(""),
+    subheadline: text("subheadline").notNull().default(""),
+    offerText: text("offer_text").notNull().default(""),
+    callToAction: text("call_to_action").notNull().default(""),
+    visualStyle: text("visual_style").notNull().default(""),
+    aspectRatio: text("aspect_ratio").notNull().default("1:1"),
+    status: text("status").notNull().default("DRAFT"),
+    ...timestamps
+  },
+  (table) => [index("creative_briefs_workspace_status_idx").on(table.workspaceId, table.status)]
+);
+
+export const generationRuns = pgTable(
+  "generation_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+    creativeBriefId: uuid("creative_brief_id").notNull().references(() => creativeBriefs.id, { onDelete: "cascade" }),
+    attempt: integer("attempt").notNull().default(1),
+    provider: providerEnum("provider"),
+    model: text("model"),
+    status: text("status").notNull().default("QUEUED"),
+    idempotencyKey: text("idempotency_key").notNull(),
+    promptVersion: integer("prompt_version").notNull().default(1),
+    inputAssetIds: text("input_asset_ids").array().notNull().default(sql`'{}'::text[]`),
+    outputAssetIds: text("output_asset_ids").array().notNull().default(sql`'{}'::text[]`),
+    usage: jsonb("usage").$type<Record<string, unknown>>().notNull().default({}),
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    ...timestamps
+  },
+  (table) => [
+    uniqueIndex("generation_runs_idempotency_unique").on(table.idempotencyKey),
+    index("generation_runs_brief_idx").on(table.creativeBriefId, table.createdAt)
+  ]
 );
 
 export const conceptResearchSources = pgTable(
@@ -306,6 +405,7 @@ export const mediaAssets = pgTable(
     durationMs: integer("duration_ms"),
     checksum: text("checksum").notNull(),
     generationMetadata: jsonb("generation_metadata").$type<Record<string, unknown>>().notNull().default({}),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
     ...timestamps
   },
   (table) => [index("media_assets_variant_idx").on(table.variantId)]
@@ -390,8 +490,11 @@ export const magicLinks = pgTable(
     email: text("email").notNull(),
     tokenHash: text("token_hash").notNull(),
     role: workspaceRoleEnum("role").notNull(),
+    purpose: text("purpose").notNull().default("LOGIN"),
+    invitedBy: uuid("invited_by").references(() => users.id, { onDelete: "set null" }),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
   },
   (table) => [uniqueIndex("magic_links_token_unique").on(table.tokenHash), index("magic_links_email_idx").on(table.email)]
@@ -519,5 +622,3 @@ export type SocialPostInsightEntity = typeof socialPostInsights.$inferSelect;
 export type DailyWorkspaceMetricEntity = typeof dailyWorkspaceMetrics.$inferSelect;
 export type ContentTemplateEntity = typeof contentTemplates.$inferSelect;
 export type NotificationPreferenceEntity = typeof notificationPreferences.$inferSelect;
-
-

@@ -36,26 +36,32 @@ function formatDateHeader(dateStr: string) {
   }).format(dateObj);
 }
 
-function getStatusBadge(state: string) {
-  switch (state) {
+function getStatusBadge(concept: CalendarConceptItem) {
+  switch (concept.state) {
     case "APPROVED":
     case "SCHEDULED":
-      return { label: "Ready to Publish", color: "green", dot: "green" };
+      return { label: "Dijadwalkan", color: "green", dot: "green" };
+    case "PUBLISHING":
+      return { label: "Sedang Diterbitkan", color: "purple", dot: "purple" };
     case "PUBLISHED":
-      return { label: "Published", color: "indigo", dot: "indigo" };
+      return { label: "Sudah Terbit", color: "indigo", dot: "indigo" };
     case "FINAL_REVIEW":
-      return { label: "Perlu Approval Konten", color: "orange", dot: "orange" };
+      return { label: "Menunggu Persetujuan", color: "amber", dot: "amber" };
     case "IDEA_REVIEW":
-      return { label: "Perlu Review Ide", color: "amber", dot: "amber" };
+      return { label: "Menunggu Persetujuan", color: "amber", dot: "amber" };
     case "IDEA_APPROVED":
     case "GENERATING":
-      return { label: "Sedang Generate", color: "purple", dot: "purple" };
+      return { label: "Sedang Disiapkan", color: "purple", dot: "purple" };
     case "REJECTED":
-      return { label: "Ditolak", color: "red", dot: "red" };
+      return { label: "Tidak Dilanjutkan", color: "red", dot: "red" };
     case "HELD":
     case "FAILED":
-      return { label: "Perlu Revisi", color: "red", dot: "red" };
+      return { label: "Perlu Tindakan", color: "red", dot: "red" };
     case "IDEA_DRAFT":
+      if (concept.topic === "Menyusun ide konten...") {
+        return { label: "Sedang Disiapkan", color: "purple", dot: "purple" };
+      }
+      return { label: "Draft", color: "gray", dot: "gray" };
     default:
       return { label: "Draft", color: "gray", dot: "gray" };
   }
@@ -96,13 +102,13 @@ export function DayDrawer({
                 {readyCount > 0 && (
                   <span className="crm-status-pill mini green">
                     <span className="crm-status-dot green" />
-                    <span>{readyCount} Ready</span>
+                    <span>{readyCount} Terjadwal</span>
                   </span>
                 )}
                 {reviewCount > 0 && (
                   <span className="crm-status-pill mini amber">
                     <span className="crm-status-dot amber" />
-                    <span>{reviewCount} Perlu Approval</span>
+                    <span>{reviewCount} Menunggu Persetujuan</span>
                   </span>
                 )}
               </div>
@@ -140,7 +146,11 @@ export function DayDrawer({
           ) : (
             <div className="crm-drawer-items-list">
               {concepts.map((concept) => {
-                const status = getStatusBadge(concept.state);
+                const status = getStatusBadge(concept);
+                const displayTopic =
+                  ["HELD", "FAILED"].includes(concept.state) && concept.topic === "Menyusun ide konten..."
+                    ? "Ide belum berhasil dibuat"
+                    : concept.topic;
                 return (
                   <div
                     key={concept.id}
@@ -176,7 +186,14 @@ export function DayDrawer({
                         </span>
                       </div>
 
-                      <b className="crm-drawer-card-topic">{concept.topic}</b>
+                      <b className="crm-drawer-card-topic">{displayTopic}</b>
+
+                      {concept.heldReason && (
+                        <p className="crm-drawer-card-caption-preview">
+                          {concept.heldReason.slice(0, 110)}
+                          {concept.heldReason.length > 110 ? "..." : ""}
+                        </p>
+                      )}
 
                       {concept.initialCaption && (
                         <p className="crm-drawer-card-caption-preview">

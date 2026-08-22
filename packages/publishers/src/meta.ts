@@ -4,6 +4,11 @@ import { capabilityFor, type ChannelFeatureFlags } from "./capabilities";
 
 type MetaResponse = { id?: string; post_id?: string };
 
+function graphVersion(): string {
+  const configured = process.env.META_GRAPH_API_VERSION?.trim() || "v24.0";
+  return /^v\d+\.\d+$/.test(configured) ? configured : "v24.0";
+}
+
 export class MetaPublisher implements SocialPublisherAdapter {
   constructor(readonly channel: "FACEBOOK" | "INSTAGRAM" | "THREADS", private readonly flags: ChannelFeatureFlags) {}
 
@@ -28,7 +33,7 @@ export class MetaPublisher implements SocialPublisherAdapter {
     const endpoint = request.contentKind === "IMAGE" ? "photos" : "feed";
     const body = new URLSearchParams({ access_token: token, message: request.caption });
     if (request.mediaUrls[0]) body.set(request.contentKind === "IMAGE" ? "url" : "link", request.mediaUrls[0]);
-    const response = await publishFetch(this.channel, `https://graph.facebook.com/v24.0/${request.externalAccountId}/${endpoint}`, { method: "POST", body });
+    const response = await publishFetch(this.channel, `https://graph.facebook.com/${graphVersion()}/${request.externalAccountId}/${endpoint}`, { method: "POST", body });
     const payload = (await response.json()) as MetaResponse;
     const id = payload.post_id ?? payload.id;
     if (!id) throw new Error("Facebook returned no post ID");
@@ -36,18 +41,17 @@ export class MetaPublisher implements SocialPublisherAdapter {
   }
 
   private async publishInstagram(token: string, request: PublishRequest): Promise<PublishResult> {
-    const mediaType = request.contentKind === "SHORT_VIDEO" ? "REELS" : request.contentKind === "STORY" ? "STORIES" : "IMAGE";
-    const body = new URLSearchParams({ access_token: token, caption: request.caption, media_type: mediaType });
+    const body = new URLSearchParams({ access_token: token, caption: request.caption });
     const asset = request.mediaUrls[0]!;
-    body.set(mediaType === "REELS" || mediaType === "STORIES" && asset.includes("video") ? "video_url" : "image_url", asset);
-    const containerResponse = await publishFetch(this.channel, `https://graph.instagram.com/v24.0/${request.externalAccountId}/media`, { method: "POST", body });
+    body.set("image_url", asset);
+    const containerResponse = await publishFetch(this.channel, `https://graph.facebook.com/${graphVersion()}/${request.externalAccountId}/media`, { method: "POST", body });
     const container = (await containerResponse.json()) as MetaResponse;
     if (!container.id) throw new Error("Instagram returned no media container ID");
     const publishBody = new URLSearchParams({ access_token: token, creation_id: container.id });
-    const response = await publishFetch(this.channel, `https://graph.instagram.com/v24.0/${request.externalAccountId}/media_publish`, { method: "POST", body: publishBody });
+    const response = await publishFetch(this.channel, `https://graph.facebook.com/${graphVersion()}/${request.externalAccountId}/media_publish`, { method: "POST", body: publishBody });
     const payload = (await response.json()) as MetaResponse;
     if (!payload.id) throw new Error("Instagram returned no media ID");
-    return { status: "PUBLISHED", externalPostId: payload.id, externalUrl: `https://instagram.com/p/${payload.id}` };
+    return { status: "PUBLISHED", externalPostId: payload.id };
   }
 
   private async publishThreads(token: string, request: PublishRequest): Promise<PublishResult> {
@@ -63,6 +67,6 @@ export class MetaPublisher implements SocialPublisherAdapter {
     });
     const payload = (await response.json()) as MetaResponse;
     if (!payload.id) throw new Error("Threads returned no post ID");
-    return { status: "PUBLISHED", externalPostId: payload.id, externalUrl: `https://threads.net/post/${payload.id}` };
+    return { status: "PUBLISHED", externalPostId: payload.id };
   }
 }

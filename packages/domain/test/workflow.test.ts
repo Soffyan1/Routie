@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertTransition, canTransition, hasPermission, stateAfterVariantEdit } from "../src/workflow";
+import { assertTransition, canTransition, hasPermission, hasWorkspacePermission, stateAfterVariantEdit } from "../src/workflow";
 
 describe("content workflow", () => {
   it("enforces the two approval gates", () => {
@@ -19,5 +19,13 @@ describe("content workflow", () => {
     expect(hasPermission("OWNER", "MANAGE")).toBe(true);
     expect(hasPermission("EDITOR", "APPROVE")).toBe(false);
     expect(hasPermission("APPROVER", "EDIT")).toBe(false);
+  });
+
+  it("keeps team and integration permissions aligned with the role matrix", () => {
+    expect(hasWorkspacePermission("OWNER", "MANAGE_TEAM")).toBe(true);
+    expect(hasWorkspacePermission("EDITOR", "MANAGE_TEAM")).toBe(false);
+    expect(hasWorkspacePermission("EDITOR", "MANAGE_SOCIAL_CONNECTIONS")).toBe(true);
+    expect(hasWorkspacePermission("EDITOR", "MANAGE_API_KEYS")).toBe(false);
+    expect(hasWorkspacePermission("APPROVER", "VIEW_ANALYTICS")).toBe(true);
   });
 });

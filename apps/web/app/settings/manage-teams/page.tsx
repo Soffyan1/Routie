@@ -9,6 +9,7 @@ import {
   Loader2,
   Mail,
   MoreVertical,
+  RefreshCw,
   Shield,
   ShieldCheck,
   Trash2,
@@ -17,6 +18,7 @@ import {
   Users
 } from "lucide-react";
 import { InviteForm } from "@/components/settings-forms";
+import { hasWorkspacePermission, workspacePermissionMatrix, type WorkspacePermission } from "@routie/domain";
 
 interface TeamMember {
   id: string;
@@ -41,6 +43,7 @@ function initials(name: string): string {
 export default function ManageTeamsPage() {
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [invites, setInvites] = useState<PendingInvite[]>([]);
+  const [canManage, setCanManage] = useState(false);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ success: boolean; text: string } | null>(null);
@@ -53,6 +56,7 @@ export default function ManageTeamsPage() {
         const data = await res.json();
         setMembers(data.members || []);
         setInvites(data.invitations || []);
+        setCanManage(Boolean(data.canManage));
       }
     } catch {
       // ignore
@@ -107,6 +111,28 @@ export default function ManageTeamsPage() {
       }
     } catch {
       setStatusMessage({ success: false, text: "Kesalahan jaringan saat menghapus anggota." });
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  async function handleInvitationAction(invitationId: string, action: "resend" | "cancel") {
+    if (action === "cancel" && !confirm("Batalkan undangan ini? Link undangan tidak akan bisa digunakan lagi.")) return;
+    const key = `${action}-${invitationId}`;
+    try {
+      setActionLoading(key);
+      setStatusMessage(null);
+      const res = await fetch("/api/team/invitations", {
+        method: action === "cancel" ? "DELETE" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(action === "cancel" ? { invitationId } : { action: "resend", invitationId })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Gagal memperbarui undangan.");
+      setStatusMessage({ success: true, text: action === "cancel" ? "Undangan berhasil dibatalkan." : "Undangan baru berhasil dikirim ulang." });
+      await fetchTeam();
+    } catch (error) {
+      setStatusMessage({ success: false, text: error instanceof Error ? error.message : "Gagal memperbarui undangan." });
     } finally {
       setActionLoading(null);
     }
@@ -177,7 +203,7 @@ export default function ManageTeamsPage() {
                     </div>
 
                     <div className="crm-member-actions-col">
-                      {!isOwner && (
+                      {!isOwner && canManage && (
                         <div className="crm-member-role-select-wrap">
                           <label className="crm-sublabel">Ubah Hak Akses:</label>
                           <select
@@ -192,7 +218,7 @@ export default function ManageTeamsPage() {
                         </div>
                       )}
 
-                      {!isOwner && (
+                      {!isOwner && canManage && (
                         <button
                           type="button"
                           className="crm-icon-btn-danger"
@@ -213,7 +239,7 @@ export default function ManageTeamsPage() {
       </section>
 
       {/* Section 2: Invite New Member */}
-      <section className="crm-settings-card">
+      {canManage && <section className="crm-settings-card">
         <div className="crm-settings-card-header">
           <div className="crm-settings-title-group">
             <div className="crm-settings-icon-badge blue">
@@ -229,7 +255,7 @@ export default function ManageTeamsPage() {
         </div>
 
         <div className="crm-settings-card-content">
-          <InviteForm />
+          <InviteForm onSuccess={fetchTeam} />
 
           {/* Pending Invitations list */}
           {invites.length > 0 && (
@@ -244,15 +270,35 @@ export default function ManageTeamsPage() {
                       <span className="crm-pending-role">{inv.role}</span>
                     </div>
                     <span className="crm-pending-expiry">
-                      <Clock size={12} /> Kadaluarsa: {new Date(inv.expiresAt).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}
+                      <Clock size={12} /> Kadaluarsa: {new Date(inv.expiresAt).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" })}
                     </span>
+                    <div className="crm-pending-invite-actions">
+                      <button
+                        type="button"
+                        className="crm-icon-btn"
+                        title="Kirim ulang undangan"
+                        disabled={actionLoading !== null}
+                        onClick={() => handleInvitationAction(inv.id, "resend")}
+                      >
+                        {actionLoading === `resend-${inv.id}` ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />}
+                      </button>
+                      <button
+                        type="button"
+                        className="crm-icon-btn-danger"
+                        title="Batalkan undangan"
+                        disabled={actionLoading !== null}
+                        onClick={() => handleInvitationAction(inv.id, "cancel")}
+                      >
+                        {actionLoading === `cancel-${inv.id}` ? <Loader2 className="spin" size={14} /> : <Trash2 size={14} />}
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
             </div>
           )}
         </div>
-      </section>
+      </section>}
 
       {/* Section 3: Role & Permission Matrix */}
       <section className="crm-settings-card">
@@ -282,48 +328,16 @@ export default function ManageTeamsPage() {
                 </tr>
               </thead>
               <tbody>
-                <tr>
-                  <td>Generate Ide & Konsep AI</td>
-                  <td className="text-center text-green">✅</td>
-                  <td className="text-center text-green">✅</td>
-                  <td className="text-center text-red">❌</td>
-                </tr>
-                <tr>
-                  <td>Review & Setujui Konsep (Approval Center)</td>
-                  <td className="text-center text-green">✅</td>
-                  <td className="text-center text-red">❌</td>
-                  <td className="text-center text-green">✅</td>
-                </tr>
-                <tr>
-                  <td>Ubah Identitas Brand & Template</td>
-                  <td className="text-center text-green">✅</td>
-                  <td className="text-center text-green">✅</td>
-                  <td className="text-center text-red">❌</td>
-                </tr>
-                <tr>
-                  <td>Kelola Kunci API & Media Engine</td>
-                  <td className="text-center text-green">✅</td>
-                  <td className="text-center text-red">❌</td>
-                  <td className="text-center text-red">❌</td>
-                </tr>
-                <tr>
-                  <td>Hubungkan Channel Sosial Media</td>
-                  <td className="text-center text-green">✅</td>
-                  <td className="text-center text-green">✅</td>
-                  <td className="text-center text-red">❌</td>
-                </tr>
-                <tr>
-                  <td>Undang & Hapus Anggota Tim</td>
-                  <td className="text-center text-green">✅</td>
-                  <td className="text-center text-red">❌</td>
-                  <td className="text-center text-red">❌</td>
-                </tr>
-                <tr>
-                  <td>Melihat Statistik & Laporan Performa</td>
-                  <td className="text-center text-green">✅</td>
-                  <td className="text-center text-green">✅</td>
-                  <td className="text-center text-green">✅</td>
-                </tr>
+                {workspacePermissionMatrix.map((item) => (
+                  <tr key={item.permission}>
+                    <td>{item.label}</td>
+                    {(["OWNER", "EDITOR", "APPROVER"] as const).map((role) => (
+                      <td key={role} className={`text-center ${hasWorkspacePermission(role, item.permission as WorkspacePermission) ? "text-green" : "text-red"}`}>
+                        {hasWorkspacePermission(role, item.permission as WorkspacePermission) ? "✅" : "❌"}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>

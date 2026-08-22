@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
-import { createDatabase, socialConnections, withTenant } from "@routie/db";
+import { auditEvents, createDatabase, socialConnections, withTenant } from "@routie/db";
 import { requireSession } from "@/lib/auth";
 import { serverEnv } from "@/lib/env";
 import { apiError } from "@/lib/http";
@@ -18,7 +18,8 @@ const CHANNELS = [
 export async function GET() {
   try {
     const session = await requireSession();
-    const db = createDatabase(serverEnv().DATABASE_URL);
+    const env = serverEnv();
+    const db = createDatabase(env.DATABASE_URL);
     const connections = await withTenant(db, session.workspaceId, async (tx) => {
       return tx
         .select()
@@ -26,15 +27,13 @@ export async function GET() {
         .where(eq(socialConnections.workspaceId, session.workspaceId));
     });
 
-    const now = new Date();
     const result = CHANNELS.map((ch) => {
-      const conn = connections.find((c) => c.channel === ch.id && !c.disconnectedAt);
-      const isConnected = Boolean(conn);
-      const tokenExpiresAt = conn?.tokenExpiresAt;
-      const isExpiringSoon = tokenExpiresAt
-        ? new Date(tokenExpiresAt).getTime() - now.getTime() < 3 * 24 * 3600 * 1000 && new Date(tokenExpiresAt).getTime() > now.getTime()
-        : false;
-      const isExpired = tokenExpiresAt ? new Date(tokenExpiresAt).getTime() <= now.getTime() : false;
+      const conn =
+        connections.find((c) => c.channel === ch.id && !c.disconnectedAt) ??
+        connections.find((c) => c.channel === ch.id);
+      const requiresReconnect = Boolean(conn?.reauthorizationRequiredAt);
+      const isConnected = Boolean(conn?.encryptedAccessToken && !conn.disconnectedAt && !requiresReconnect);
+      const status = requiresReconnect ? "RECONNECT_REQUIRED" : isConnected ? "CONNECTED" : "DISCONNECTED";
 
       return {
         id: ch.id,
@@ -44,11 +43,21 @@ export async function GET() {
         defaultMode: ch.mode,
         supported: ch.supported,
         isConnected,
+        status,
+        requiresReconnect,
         accountName: conn?.accountName || null,
         deliveryMode: conn?.deliveryMode || "AUTO_PUBLISH",
-        tokenExpiresAt: conn?.tokenExpiresAt || null,
-        isExpiringSoon,
-        isExpired,
+        autoPublishEnabled:
+          ch.id === "FACEBOOK" || ch.id === "INSTAGRAM"
+            ? env.ENABLE_META_AUTO_PUBLISH === "true"
+            : ch.id === "THREADS"
+              ? env.ENABLE_THREADS_AUTO_PUBLISH === "true"
+              : ch.id === "TIKTOK"
+                ? env.ENABLE_TIKTOK_AUTO_PUBLISH === "true"
+                : ch.id === "YOUTUBE"
+                  ? env.ENABLE_YOUTUBE_AUTO_PUBLISH === "true"
+                  : false,
+        draftSyncEnabled: ch.id === "TIKTOK" && env.ENABLE_TIKTOK_DRAFT_SYNC === "true",
         connectedAt: conn?.connectedAt || null
       };
     });
@@ -61,8 +70,7 @@ export async function GET() {
 
 const toggleSchema = z.object({
   channel: z.enum(["INSTAGRAM", "FACEBOOK", "TIKTOK", "THREADS", "YOUTUBE", "X"]),
-  action: z.enum(["connect", "disconnect", "update_mode"]),
-  accountName: z.string().optional(),
+  action: z.enum(["disconnect", "update_mode"]),
   deliveryMode: z.enum(["AUTO_PUBLISH", "PLATFORM_DRAFT", "EXPORT_MANUAL"]).optional()
 });
 
@@ -74,44 +82,45 @@ export async function POST(request: NextRequest) {
     }
 
     const input = toggleSchema.parse(await request.json());
+    if (
+      input.action === "update_mode" &&
+      (input.channel === "FACEBOOK" || input.channel === "INSTAGRAM" || input.channel === "THREADS") &&
+      input.deliveryMode !== "AUTO_PUBLISH"
+    ) {
+      throw new Error("Mode publikasi Meta dikelola otomatis oleh Routie.");
+    }
+    if (input.action === "update_mode" && input.channel === "TIKTOK") {
+      if (input.deliveryMode === "AUTO_PUBLISH") {
+        throw new Error("Posting langsung TikTok memerlukan persetujuan per konten. Gunakan Draft TikTok untuk jadwal otomatis.");
+      }
+      if (input.deliveryMode === "PLATFORM_DRAFT" && serverEnv().ENABLE_TIKTOK_DRAFT_SYNC !== "true") {
+        throw new Error("Draft TikTok akan aktif otomatis setelah integrasi Routie disetujui TikTok.");
+      }
+    }
     const db = createDatabase(serverEnv().DATABASE_URL);
 
     await withTenant(db, session.workspaceId, async (tx) => {
       if (input.action === "disconnect") {
         await tx
           .update(socialConnections)
-          .set({ disconnectedAt: new Date(), updatedAt: new Date() })
+          .set({
+            encryptedAccessToken: null,
+            encryptedRefreshToken: null,
+            tokenExpiresAt: null,
+            disconnectedAt: new Date(),
+            reauthorizationRequiredAt: null,
+            reauthorizationReason: null,
+            updatedAt: new Date()
+          })
           .where(and(eq(socialConnections.workspaceId, session.workspaceId), eq(socialConnections.channel, input.channel)));
-      } else if (input.action === "connect") {
-        const fakeExpiry = new Date(Date.now() + 60 * 24 * 3600 * 1000); // 60 days
-        const accountName = input.accountName || `@${session.email.split("@")[0]}_official`;
-        const existing = await tx
-          .select()
-          .from(socialConnections)
-          .where(and(eq(socialConnections.workspaceId, session.workspaceId), eq(socialConnections.channel, input.channel)))
-          .limit(1);
-
-        if (existing[0]) {
-          await tx
-            .update(socialConnections)
-            .set({
-              disconnectedAt: null,
-              accountName,
-              tokenExpiresAt: fakeExpiry,
-              updatedAt: new Date()
-            })
-            .where(eq(socialConnections.id, existing[0].id));
-        } else {
-          await tx.insert(socialConnections).values({
-            workspaceId: session.workspaceId,
-            channel: input.channel,
-            deliveryMode: input.deliveryMode || "AUTO_PUBLISH",
-            externalAccountId: `ext_${Date.now()}`,
-            accountName,
-            tokenExpiresAt: fakeExpiry,
-            connectedAt: new Date()
-          });
-        }
+        await tx.insert(auditEvents).values({
+          workspaceId: session.workspaceId,
+          actorId: session.sub,
+          action: "SOCIAL_ACCOUNT_DISCONNECTED",
+          entityType: "social_connection",
+          entityId: input.channel,
+          after: { channel: input.channel }
+        });
       } else if (input.action === "update_mode" && input.deliveryMode) {
         await tx
           .update(socialConnections)

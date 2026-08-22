@@ -30,11 +30,20 @@ export async function publishFetch(channel: string, url: string, init: RequestIn
     });
   }
   if (!response.ok) {
-    const sanitizedBody = (await response.text()).slice(0, 1500).replace(/access_token=[^&\s]+/g, "access_token=[REDACTED]");
+    const rawBody = (await response.text()).slice(0, 1500);
+    const sanitizedBody = rawBody.replace(/access_token[=\"':%20]+[^&\s\"}]+/gi, "access_token=[REDACTED]");
+    let providerCode = `HTTP_${response.status}`;
+    try {
+      const parsed = JSON.parse(rawBody) as { error?: { code?: number; error_subcode?: number } };
+      if (parsed.error?.code === 190) providerCode = "SOCIAL_TOKEN_INVALID";
+      else if (parsed.error?.code) providerCode = `META_${parsed.error.code}`;
+    } catch {
+      // Keep the HTTP status code when the provider body is not JSON.
+    }
     throw new PublishRequestError({
-      code: `HTTP_${response.status}`,
+      code: providerCode,
       message: `${channel} publish failed (${response.status})`,
-      retryable: response.status === 408 || response.status === 409 || response.status === 429 || response.status >= 500,
+      retryable: providerCode !== "SOCIAL_TOKEN_INVALID" && (response.status === 408 || response.status === 409 || response.status === 429 || response.status >= 500),
       provider: channel,
       details: { sanitizedBody }
     });

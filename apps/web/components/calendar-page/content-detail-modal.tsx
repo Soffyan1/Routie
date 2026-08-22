@@ -1,27 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   AlertCircle,
   AlertTriangle,
-  Calendar,
   Check,
   CheckCircle2,
+  Clipboard,
   Clock,
+  Download,
   Edit3,
   ExternalLink,
-  Eye,
-  Hash,
   Image as ImageIcon,
-  Layers,
   Loader2,
+  Maximize2,
   Paintbrush,
-  PlaySquare,
-  Send,
   Sparkles,
-  Tag,
   Trash2,
-  User,
+  Upload,
   X
 } from "lucide-react";
 import type { CalendarConceptItem } from "@/app/api/calendar/route";
@@ -40,29 +36,58 @@ export function ContentDetailModal({ concept, onClose, onRefresh }: ContentDetai
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showRevisionModal, setShowRevisionModal] = useState(false);
+  const [showMediaDetail, setShowMediaDetail] = useState(false);
+  const [isDownloadingMedia, setIsDownloadingMedia] = useState(false);
+  const [isUploadingVisual, setIsUploadingVisual] = useState(false);
+  const [promptCopied, setPromptCopied] = useState(false);
+  const visualInputRef = useRef<HTMLInputElement>(null);
+  const isIdeaGenerationPending = concept.state === "IDEA_DRAFT" && concept.topic === "Menyusun ide konten...";
+  const displayTopic =
+    ["HELD", "FAILED"].includes(concept.state) && concept.topic === "Menyusun ide konten..."
+      ? "Ide belum berhasil dibuat"
+      : concept.topic;
+  const hasCompletedIdea =
+    concept.topic !== "Menyusun ide konten..." &&
+    concept.topic !== "Ide belum berhasil dibuat" &&
+    Boolean(concept.hook || concept.initialCaption);
+  const canRegenerateIdea =
+    (["HELD", "FAILED"].includes(concept.state) && !hasCompletedIdea) ||
+    (concept.state === "IDEA_DRAFT" && !isIdeaGenerationPending);
+  const canRetryMedia =
+    ["HELD", "FAILED"].includes(concept.state) && hasCompletedIdea && !concept.mediaAsset;
+  const hasActiveMedia = Boolean(concept.mediaAsset?.url && !concept.mediaAsset.archivedAt);
+  const isVideo = Boolean(
+    concept.mediaAsset &&
+      (concept.mediaAsset.kind === "VIDEO" || concept.mediaAsset.mimeType.startsWith("video/"))
+  );
 
   // Helper for Status Badge & Label
   function getStatusMeta(state: string) {
     switch (state) {
       case "APPROVED":
       case "SCHEDULED":
-        return { label: "Ready to Publish", color: "green", dot: "green", desc: "Konten telah disetujui dan siap diterbitkan sesuai jadwal." };
+        return { label: "Dijadwalkan", color: "green", dot: "green", desc: "Routie akan menerbitkan konten ini sesuai waktu yang dijadwalkan." };
+      case "PUBLISHING":
+        return { label: "Sedang Diterbitkan", color: "purple", dot: "purple", desc: "Routie sedang mengirim konten ke akun sosial media Anda." };
       case "PUBLISHED":
-        return { label: "Published", color: "indigo", dot: "indigo", desc: "Konten telah berhasil dipublikasikan ke media sosial." };
+        return { label: "Sudah Terbit", color: "indigo", dot: "indigo", desc: "Konten telah berhasil dipublikasikan ke media sosial." };
       case "FINAL_REVIEW":
-        return { label: "Perlu Approval Konten (Visual Siap)", color: "orange", dot: "orange", desc: "Visual konten telah selesai di-generate. Perlu persetujuan akhir sebelum dipublikasikan." };
       case "IDEA_REVIEW":
-        return { label: "Perlu Review Ide (Draf Teks)", color: "amber", dot: "amber", desc: "Ide konten baru dari AI, silakan cek topik & caption sebelum dibuatkan visualnya." };
+        return { label: "Menunggu Persetujuan", color: "amber", dot: "amber", desc: "Periksa konten ini, lalu setujui jika sudah sesuai dengan brand Anda." };
       case "IDEA_APPROVED":
-        return { label: "Ide Disetujui (Siap Render)", color: "purple", dot: "purple", desc: "Ide disetujui. Siap diproses pembuatan visual AI." };
+        return { label: "Sedang Disiapkan", color: "purple", dot: "purple", desc: "Routie sedang menyiapkan visual dan versi konten untuk akun tujuan." };
       case "GENERATING":
-        return { label: "Sedang Generate Media...", color: "purple", dot: "purple", desc: "AI worker sedang membuat gambar / aset media." };
+        return { label: "Sedang Disiapkan", color: "purple", dot: "purple", desc: "AI sedang membuat visual dan aset media konten." };
       case "REJECTED":
-        return { label: "Ditolak", color: "red", dot: "red", desc: "Konten ditolak atau dibatalkan." };
+        return { label: "Tidak Dilanjutkan", color: "red", dot: "red", desc: "Konten ini tidak akan diterbitkan." };
       case "HELD":
       case "FAILED":
-        return { label: "Perlu Perhatian / Direvisi", color: "red", dot: "red", desc: concept.heldReason || "Perlu revisi sebelum diproses." };
+        return { label: "Perlu Tindakan", color: "red", dot: "red", desc: concept.heldReason || "Routie memerlukan tindakan sebelum dapat melanjutkan konten ini." };
       case "IDEA_DRAFT":
+        if (isIdeaGenerationPending) {
+          return { label: "Sedang Disiapkan", color: "purple", dot: "purple", desc: "Routie sedang menyusun ide konten." };
+        }
+        return { label: "Draft", color: "gray", dot: "gray", desc: "Draf konten belum dikirim ke AI." };
       default:
         return { label: "Draft", color: "gray", dot: "gray", desc: "Draf konten masih dalam pengerjaan." };
     }
@@ -146,8 +171,8 @@ export function ContentDetailModal({ concept, onClose, onRefresh }: ContentDetai
         method: "POST"
       });
       if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Gagal membuat ulang ide");
+        const data = (await res.json()) as { error?: string; message?: string };
+        throw new Error(data.message || data.error || "Gagal membuat ulang ide");
       }
       onRefresh();
       onClose();
@@ -158,16 +183,77 @@ export function ContentDetailModal({ concept, onClose, onRefresh }: ContentDetai
     }
   }
 
+  async function handleDownloadMedia() {
+    if (!concept.mediaAsset || !hasActiveMedia) return;
+    setIsDownloadingMedia(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/assets/${concept.mediaAsset.id}/download`, {
+        method: "GET",
+        cache: "no-store"
+      });
+      const data = (await response.json()) as { downloadUrl?: string; filename?: string; message?: string };
+      if (!response.ok || !data.downloadUrl) {
+        throw new Error(data.message || "Media belum dapat diunduh.");
+      }
+
+      const link = document.createElement("a");
+      link.href = data.downloadUrl;
+      link.download = data.filename || "routie-media";
+      link.rel = "noopener";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (downloadError) {
+      setError(downloadError instanceof Error ? downloadError.message : "Gagal mengunduh media.");
+    } finally {
+      setIsDownloadingMedia(false);
+    }
+  }
+
+  async function handleVisualUpload(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!/^image\/(png|jpeg|webp)$/.test(file.type)) return setError("Hasil visual harus berupa PNG, JPG, atau WebP.");
+    setIsUploadingVisual(true); setError(null);
+    try {
+      const urlResponse = await fetch("/api/assets/upload-url", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ filename: file.name, contentType: file.type, sizeBytes: file.size }) });
+      const urlData = await urlResponse.json() as { objectKey?: string; uploadUrl?: string; message?: string };
+      if (!urlResponse.ok || !urlData.objectKey || !urlData.uploadUrl) throw new Error(urlData.message || "Gagal menyiapkan upload.");
+      const putResponse = await fetch(urlData.uploadUrl, { method: "PUT", headers: { "Content-Type": file.type }, body: file });
+      if (!putResponse.ok) throw new Error("Gagal mengunggah hasil visual.");
+      const completeResponse = await fetch("/api/assets/complete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ objectKey: urlData.objectKey, kind: "IMAGE", contentType: file.type, sizeBytes: file.size, checksum: `sha256-ai-result-${Date.now()}-${file.size}`, metadata: { filename: file.name, usage: "AI_RESULT" } }) });
+      const completeData = await completeResponse.json() as { asset?: { id: string }; message?: string };
+      if (!completeResponse.ok || !completeData.asset?.id) throw new Error(completeData.message || "Gagal menyimpan hasil visual.");
+      const attachResponse = await fetch(`/api/concepts/${concept.id}/upload-visual`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ assetId: completeData.asset.id }) });
+      const attachData = await attachResponse.json() as { success?: boolean; message?: string };
+      if (!attachResponse.ok || !attachData.success) throw new Error(attachData.message || "Gagal memasukkan visual ke Calendar.");
+      onRefresh(); onClose();
+    } catch (uploadError) { setError(uploadError instanceof Error ? uploadError.message : "Gagal mengunggah hasil visual."); }
+    finally { setIsUploadingVisual(false); event.target.value = ""; }
+  }
+
+  async function copyPrompt() {
+    await navigator.clipboard.writeText(concept.visualPrompt);
+    setPromptCopied(true);
+    window.setTimeout(() => setPromptCopied(false), 1600);
+  }
+
   return (
     <>
-      <div className="crm-modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <div
+        className="crm-modal-backdrop"
+        role="presentation"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) onClose();
+        }}
+      >
         <div
           className="crm-modal-container crm-content-detail-modal"
           role="dialog"
           aria-modal="true"
           onMouseDown={(e) => e.stopPropagation()}
         >
-          {/* Header */}
           <header className="crm-modal-header crm-detail-header">
             <div className="crm-modal-title-wrap">
               <div className="crm-detail-eyebrow-row">
@@ -180,28 +266,57 @@ export function ContentDetailModal({ concept, onClose, onRefresh }: ContentDetai
                   <span>{concept.localDate} • {concept.localTime} WIB</span>
                 </span>
               </div>
-              <h2 className="crm-modal-title" style={{ fontSize: "18px", marginTop: "4px" }}>
-                {concept.topic}
+              <h2 className="crm-modal-title">
+                {displayTopic}
               </h2>
             </div>
-            <button type="button" className="crm-modal-close-btn" onClick={onClose}>
+            <button type="button" className="crm-modal-close-btn" onClick={onClose} aria-label="Tutup detail konten">
               <X size={18} />
             </button>
           </header>
 
-          {/* Body */}
           <div className="crm-modal-form crm-detail-grid-layout">
-            {/* Left: Media Preview */}
             <div className="crm-detail-media-column">
-              <div className="crm-media-preview-box">
-                {concept.mediaAsset?.url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={concept.mediaAsset.url}
-                    alt={concept.topic}
-                    className="crm-preview-image"
-                  />
-                ) : (
+              <div className="crm-detail-section-heading">
+                <div>
+                  <span className="crm-detail-kicker">Preview media</span>
+                  <strong>{isVideo ? "Video konten" : "Visual konten"}</strong>
+                </div>
+                {hasActiveMedia && <span className="crm-media-type-chip">{isVideo ? "Video" : "Gambar"}</span>}
+              </div>
+
+              {hasActiveMedia ? (
+                <button
+                  type="button"
+                  className="crm-media-preview-box crm-media-preview-button"
+                  onClick={() => setShowMediaDetail(true)}
+                  aria-label={`Lihat detail ${isVideo ? "video" : "gambar"}`}
+                >
+                  {isVideo ? (
+                    <video
+                      src={concept.mediaAsset!.url!}
+                      className="crm-preview-image"
+                      muted
+                      playsInline
+                      preload="metadata"
+                    />
+                  ) : (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={concept.mediaAsset!.url!}
+                      alt={concept.topic}
+                      className="crm-preview-image"
+                    />
+                  )}
+                  <span className="crm-media-preview-overlay">
+                    <span className="crm-media-preview-zoom">
+                      <Maximize2 size={16} />
+                      Lihat detail
+                    </span>
+                  </span>
+                </button>
+              ) : (
+                <div className="crm-media-preview-box">
                   <div className="crm-preview-placeholder">
                     <div className="crm-preview-icon-wrap">
                       {concept.state === "GENERATING" ? (
@@ -213,48 +328,69 @@ export function ContentDetailModal({ concept, onClose, onRefresh }: ContentDetai
                     <b>
                       {concept.state === "GENERATING"
                         ? "Sedang Membuat Visual AI..."
+                        : concept.mediaAsset?.archivedAt
+                        ? "Media Sudah Dibersihkan"
                         : concept.mediaAsset
-                        ? "Memuat Gambar..."
+                        ? "Media Belum Tersedia"
                         : "Visual Belum Dibuat"}
                     </b>
                     <p>
                       {concept.state === "GENERATING"
-                        ? "Proses AI memerlukan waktu sekitar 15-30 detik."
+                        ? "Routie sedang menyiapkan visual untuk konten ini."
+                        : concept.mediaAsset?.archivedAt
+                        ? "File gambar atau video dihapus otomatis 30 hari setelah terbit. Caption, riwayat, analitik, dan link postingan tetap tersimpan."
                         : "Visual dapat dibuat dengan AI setelah ide konten disetujui."}
                     </p>
-                  </div>
-                )}
-              </div>
-
-              {/* Status explanation alert */}
-              <div className={`crm-detail-status-banner ${statusMeta.color}`}>
-                <p>{statusMeta.desc}</p>
-              </div>
-            </div>
-
-            {/* Right: Content Metadata & Details */}
-            <div className="crm-detail-info-column">
-              {/* Hook */}
-              {concept.hook && (
-                <div className="crm-detail-block">
-                  <span className="crm-detail-label">Hook / Pembuka</span>
-                  <div className="crm-detail-hook-box">
-                    &ldquo;{concept.hook}&rdquo;
                   </div>
                 </div>
               )}
 
-              {/* Caption */}
-              <div className="crm-detail-block">
+              {hasActiveMedia && (
+                <div className="crm-media-quick-actions">
+                  <button type="button" className="crm-media-action-btn" onClick={() => setShowMediaDetail(true)}>
+                    <Maximize2 size={15} />
+                    <span>Lihat detail</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="crm-media-action-btn primary"
+                    onClick={handleDownloadMedia}
+                    disabled={isDownloadingMedia}
+                  >
+                    {isDownloadingMedia ? <Loader2 className="spin" size={15} /> : <Download size={15} />}
+                    <span>{isDownloadingMedia ? "Menyiapkan..." : `Unduh ${isVideo ? "video" : "gambar"}`}</span>
+                  </button>
+                </div>
+              )}
+
+              <div className={`crm-detail-status-banner ${statusMeta.color}`}>
+                <AlertCircle size={16} />
+                <div>
+                  <strong>{statusMeta.label}</strong>
+                  <p>{statusMeta.desc}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="crm-detail-info-column">
+              {concept.hook && (
+                <section className="crm-detail-block crm-detail-surface crm-detail-hook-section">
+                  <span className="crm-detail-label">Hook / Pembuka</span>
+                  <div className="crm-detail-hook-box">
+                    &ldquo;{concept.hook}&rdquo;
+                  </div>
+                </section>
+              )}
+
+              <section className="crm-detail-block crm-detail-surface">
                 <span className="crm-detail-label">Caption Lengkap</span>
                 <div className="crm-detail-caption-box">
                   {concept.initialCaption || "Belum ada caption."}
                 </div>
-              </div>
+              </section>
 
-              {/* Hashtags */}
               {concept.hashtags && concept.hashtags.length > 0 && (
-                <div className="crm-detail-block">
+                <section className="crm-detail-block crm-detail-surface">
                   <span className="crm-detail-label">Hashtags</span>
                   <div className="crm-hashtags-cloud">
                     {concept.hashtags.map((tag, idx) => (
@@ -263,11 +399,32 @@ export function ContentDetailModal({ concept, onClose, onRefresh }: ContentDetai
                       </span>
                     ))}
                   </div>
-                </div>
+                </section>
               )}
 
-              {/* Properties Grid */}
-              <div className="crm-detail-props-grid">
+              {concept.visualPrompt && (
+                <section className="crm-detail-block crm-detail-surface">
+                  <span className="crm-detail-label">Prompt Visual</span>
+                  <div className="crm-detail-caption-box" style={{ whiteSpace: "pre-wrap", maxHeight: 260, overflowY: "auto" }}>{concept.visualPrompt}</div>
+                  <div className="crm-format-pills" style={{ marginTop: 12 }}>
+                    <button type="button" className="crm-format-pill" onClick={copyPrompt}><Clipboard size={14} />{promptCopied ? "Tersalin" : "Salin Prompt"}</button>
+                    <a className="crm-format-pill" href="https://chatgpt.com/" target="_blank" rel="noreferrer"><ExternalLink size={14} />Buka ChatGPT</a>
+                    <a className="crm-format-pill" href="https://gemini.google.com/" target="_blank" rel="noreferrer"><ExternalLink size={14} />Buka Gemini</a>
+                  </div>
+                  {concept.referenceAssets.length > 0 && <div className="crm-format-pills" style={{ marginTop: 10 }}>{concept.referenceAssets.map((asset, index) => asset.url ? <a key={asset.id} className="crm-format-pill" href={asset.url} target="_blank" rel="noreferrer"><Download size={14} />Referensi {index + 1}</a> : null)}</div>}
+                  <input ref={visualInputRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={handleVisualUpload} />
+                  <button type="button" className="crm-btn crm-btn-secondary" style={{ marginTop: 12 }} onClick={() => visualInputRef.current?.click()} disabled={isUploadingVisual}>{isUploadingVisual ? <Loader2 className="spin" size={14} /> : <Upload size={14} />}<span>{isUploadingVisual ? "Mengunggah..." : "Upload Hasil dari AI"}</span></button>
+                </section>
+              )}
+
+              <section className="crm-detail-metadata-section">
+                <div className="crm-detail-section-heading compact">
+                  <div>
+                    <span className="crm-detail-kicker">Informasi konten</span>
+                    <strong>Detail publikasi</strong>
+                  </div>
+                </div>
+                <div className="crm-detail-props-grid">
                 <div className="crm-prop-item">
                   <span className="crm-prop-label">Platform Tujuan</span>
                   <div className="crm-platform-tags">
@@ -296,7 +453,9 @@ export function ContentDetailModal({ concept, onClose, onRefresh }: ContentDetai
                       ? "✍️ Manual Upload"
                       : concept.creationMode === "SEMI_AI"
                       ? "⚡ Semi AI (Prompt Sendiri)"
-                      : "🤖 Full Otomatis AI"}
+                      : concept.generationMode === "ASSISTED"
+                      ? "✨ Full AI · Mode Hemat"
+                      : "🤖 Full AI · Mode Otomatis"}
                   </span>
                 </div>
 
@@ -314,7 +473,8 @@ export function ContentDetailModal({ concept, onClose, onRefresh }: ContentDetai
                     }).format(new Date(concept.updatedAt))}
                   </span>
                 </div>
-              </div>
+                </div>
+              </section>
 
               {error && (
                 <div className="crm-alert-toast error" style={{ marginTop: "12px" }}>
@@ -325,7 +485,6 @@ export function ContentDetailModal({ concept, onClose, onRefresh }: ContentDetai
             </div>
           </div>
 
-          {/* Footer Actions */}
           <footer className="crm-modal-footer crm-detail-footer">
             <div className="crm-detail-footer-left">
               <button
@@ -351,7 +510,7 @@ export function ContentDetailModal({ concept, onClose, onRefresh }: ContentDetai
               </button>
 
               {/* Action 0: If in IDEA_DRAFT or HELD/FAILED without topic -> Allow Generate / Coba Lagi Ide AI */}
-              {["IDEA_DRAFT", "HELD", "FAILED"].includes(concept.state) && (
+              {canRegenerateIdea && (
                 <button
                   type="button"
                   className="crm-btn crm-btn-primary"
@@ -363,12 +522,13 @@ export function ContentDetailModal({ concept, onClose, onRefresh }: ContentDetai
                   ) : (
                     <Sparkles size={14} />
                   )}
-                  <span>Generate Ulang Ide AI</span>
+                  <span>Coba Lagi Susun Ide</span>
                 </button>
               )}
 
               {/* Action 1: If in FINAL_REVIEW or HELD -> Allow Revision */}
-              {["FINAL_REVIEW", "HELD", "FAILED"].includes(concept.state) && (
+              {(concept.state === "FINAL_REVIEW" ||
+                (["HELD", "FAILED"].includes(concept.state) && Boolean(concept.mediaAsset))) && (
                 <button
                   type="button"
                   className="crm-btn crm-btn-secondary"
@@ -382,7 +542,7 @@ export function ContentDetailModal({ concept, onClose, onRefresh }: ContentDetai
               )}
 
               {/* Action 2: If IDEA_APPROVED -> Allow generate image */}
-              {concept.state === "IDEA_APPROVED" && (
+              {(concept.state === "IDEA_APPROVED" || canRetryMedia) && (
                 <button
                   type="button"
                   className="crm-btn crm-btn-primary"
@@ -394,7 +554,7 @@ export function ContentDetailModal({ concept, onClose, onRefresh }: ContentDetai
                   ) : (
                     <Sparkles size={14} />
                   )}
-                  <span>Generate Gambar AI</span>
+                  <span>{canRetryMedia ? "Coba Lagi Buat Visual" : "Generate Gambar AI"}</span>
                 </button>
               )}
 
@@ -439,7 +599,7 @@ export function ContentDetailModal({ concept, onClose, onRefresh }: ContentDetai
                   ) : (
                     <CheckCircle2 size={14} />
                   )}
-                  <span>Setujui & Siap Terbit</span>
+                <span>Setujui & Jadwalkan</span>
                 </button>
               )}
 
@@ -451,13 +611,81 @@ export function ContentDetailModal({ concept, onClose, onRefresh }: ContentDetai
                   onClick={() => handleTransition("HELD", "Diturunkan kembali ke draf")}
                   disabled={loadingAction !== null}
                 >
-                  Kembalikan ke Draf
+                  Tahan Publikasi
                 </button>
               )}
             </div>
           </footer>
         </div>
       </div>
+
+      {showMediaDetail && hasActiveMedia && concept.mediaAsset?.url && (
+        <div
+          className="crm-media-detail-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setShowMediaDetail(false);
+          }}
+        >
+          <div
+            className="crm-media-detail-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Detail ${isVideo ? "video" : "gambar"}: ${displayTopic}`}
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <header className="crm-media-detail-header">
+              <div>
+                <span className="crm-detail-kicker">{isVideo ? "Preview video" : "Preview gambar"}</span>
+                <h3>{displayTopic}</h3>
+              </div>
+              <div className="crm-media-detail-header-actions">
+                <button
+                  type="button"
+                  className="crm-media-detail-download"
+                  onClick={handleDownloadMedia}
+                  disabled={isDownloadingMedia}
+                >
+                  {isDownloadingMedia ? <Loader2 className="spin" size={16} /> : <Download size={16} />}
+                  <span>{isDownloadingMedia ? "Menyiapkan..." : "Unduh"}</span>
+                </button>
+                <button
+                  type="button"
+                  className="crm-media-detail-close"
+                  onClick={() => setShowMediaDetail(false)}
+                  aria-label="Tutup detail media"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </header>
+            <div className="crm-media-detail-stage">
+              {isVideo ? (
+                <video
+                  src={concept.mediaAsset.url}
+                  controls
+                  autoPlay
+                  playsInline
+                  className="crm-media-detail-content"
+                />
+              ) : (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={concept.mediaAsset.url}
+                  alt={displayTopic}
+                  className="crm-media-detail-content"
+                />
+              )}
+            </div>
+            {error && (
+              <div className="crm-media-detail-error">
+                <AlertCircle size={16} />
+                <span>{error}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Delete Confirmation Modal */}
       {showDeleteConfirm && (
